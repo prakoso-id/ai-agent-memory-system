@@ -1,0 +1,48 @@
+import 'dotenv/config';
+
+export const config = {
+    // LLM
+    llm: {
+        provider: process.env.LLM_PROVIDER || 'lmstudio',
+        baseUrl: process.env.LLM_BASE_URL || 'http://localhost:1234/v1',
+        apiKey: process.env.LLM_API_KEY || 'lm-studio',
+        model: process.env.LLM_MODEL || 'deepseek-r1',
+        embeddingModel: process.env.EMBEDDING_MODEL || 'nomic-embed-text',
+    },
+
+    // Redis
+    redis: {
+        url: process.env.REDIS_URL || 'redis://localhost:6379',
+    },
+
+    // PostgreSQL
+    postgres: {
+        host: process.env.POSTGRES_HOST || 'localhost',
+        port: parseInt(process.env.POSTGRES_PORT || '5432'),
+        user: process.env.POSTGRES_USER || 'agent',
+        password: process.env.POSTGRES_PASSWORD || 'agent_secret',
+        database: process.env.POSTGRES_DB || 'agent_memory',
+    },
+
+    // Qdrant
+    qdrant: {
+        url: process.env.QDRANT_URL || 'http://localhost:6333',
+        collection: process.env.QDRANT_COLLECTION || 'semantic_memory',
+    },
+
+    // Neo4j
+    neo4j: {
+        uri: process.env.NEO4J_URI || 'bolt://localhost:7687',
+        user: process.env.NEO4J_USER || 'neo4j',
+        password: process.env.NEO4J_PASSWORD || 'agent_secret',
+    },
+
+    // Agent settings
+    agent: {
+        memoryRetrievalLimit: parseInt(process.env.MEMORY_RETRIEVAL_LIMIT || '7'),
+        memoryDecayFactor: parseFloat(process.env.MEMORY_DECAY_FACTOR || '0.01'),
+        workingMemoryTTL: parseInt(process.env.WORKING_MEMORY_TTL || '3600'),
+    },
+} as const;
+
+export type Config = typeof config;
