@@ -28,6 +28,25 @@ class LLMClient {
         return response.choices[0]?.message?.content ?? '';
     }
 
+    /** Stream a chat completion response token-by-token */
+    async *chatStream(
+        messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+        options?: { temperature?: number; maxTokens?: number },
+    ): AsyncGenerator<string> {
+        const stream = await this.client.chat.completions.create({
+            model: config.llm.model,
+            messages,
+            temperature: options?.temperature ?? 0.7,
+            max_tokens: options?.maxTokens ?? 2048,
+            stream: true,
+        });
+
+        for await (const chunk of stream) {
+            const content = chunk.choices[0]?.delta?.content;
+            if (content) yield content;
+        }
+    }
+
     /** Generate a structured JSON response */
     async chatJSON<T = unknown>(
         messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
