@@ -22,15 +22,28 @@ export async function initializeDatabase(): Promise<void> {
       result        VARCHAR(20),
       context       TEXT,
       importance    REAL NOT NULL DEFAULT 0.5,
+      usage_count   INTEGER NOT NULL DEFAULT 0,
+      last_accessed TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      tags          TEXT[] DEFAULT '{}',
       metadata      JSONB DEFAULT '{}',
       created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
       updated_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
 
-    CREATE INDEX IF NOT EXISTS idx_episodic_session   ON episodic_memories(session_id);
-    CREATE INDEX IF NOT EXISTS idx_episodic_event     ON episodic_memories(event_type);
-    CREATE INDEX IF NOT EXISTS idx_episodic_created   ON episodic_memories(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_episodic_session    ON episodic_memories(session_id);
+    CREATE INDEX IF NOT EXISTS idx_episodic_event      ON episodic_memories(event_type);
+    CREATE INDEX IF NOT EXISTS idx_episodic_created    ON episodic_memories(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_episodic_importance ON episodic_memories(importance DESC);
+  `);
+
+    // Phase 1 migration: add columns to pre-existing tables (safe to run repeatedly)
+    await db.pg.query(`
+    ALTER TABLE episodic_memories
+      ADD COLUMN IF NOT EXISTS usage_count   INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS last_accessed TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      ADD COLUMN IF NOT EXISTS tags          TEXT[] DEFAULT '{}';
+
+    CREATE INDEX IF NOT EXISTS idx_episodic_tags ON episodic_memories USING gin(tags);
   `);
     console.log('  ✅ episodic_memories table ready');
 
@@ -45,12 +58,25 @@ export async function initializeDatabase(): Promise<void> {
       strategy_improvement  TEXT NOT NULL,
       related_episode_ids   UUID[] DEFAULT '{}',
       importance            REAL NOT NULL DEFAULT 0.7,
+      usage_count           INTEGER NOT NULL DEFAULT 0,
+      last_accessed         TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      tags                  TEXT[] DEFAULT '{}',
       metadata              JSONB DEFAULT '{}',
       created_at            TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
 
     CREATE INDEX IF NOT EXISTS idx_reflection_created    ON reflection_memories(created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_reflection_importance  ON reflection_memories(importance DESC);
+    CREATE INDEX IF NOT EXISTS idx_reflection_importance ON reflection_memories(importance DESC);
+  `);
+
+    // Phase 1 migration: add columns to pre-existing reflection table
+    await db.pg.query(`
+    ALTER TABLE reflection_memories
+      ADD COLUMN IF NOT EXISTS usage_count   INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS last_accessed TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      ADD COLUMN IF NOT EXISTS tags          TEXT[] DEFAULT '{}';
+
+    CREATE INDEX IF NOT EXISTS idx_reflection_tags ON reflection_memories USING gin(tags);
   `);
     console.log('  ✅ reflection_memories table ready');
 

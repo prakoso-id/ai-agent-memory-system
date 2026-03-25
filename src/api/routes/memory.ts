@@ -1,10 +1,13 @@
 import { SessionManager } from '../session-manager.js';
 import { corsHeaders } from '../middleware.js';
+import type { TaskType } from '../../memory/types.js';
 
 /**
  * Memory API route handlers.
+ *
  * POST /api/memory/store   — Store a fact/memory directly
  * POST /api/memory/search  — Semantic similarity search
+ * POST /api/memory/query   — Unified context-aware query (Phase 1)
  * GET  /api/memory/stats   — Memory layer counts
  * GET  /api/memory/graph   — Knowledge graph query
  */
@@ -17,6 +20,7 @@ export function memoryRoutes(sessions: SessionManager) {
                 content: string;
                 category?: string;
                 importance?: number;
+                tags?: string[];
             };
 
             if (!body.session_id || !body.content) {
@@ -39,11 +43,20 @@ export function memoryRoutes(sessions: SessionManager) {
                 category: body.category ?? 'general_knowledge',
                 source: 'api',
                 importance: body.importance ?? 0.7,
+                tags: body.tags ?? [],
                 metadata: { source: 'direct_api' },
             });
 
+            // store() returns null when filtered by importance or matched as duplicate
+            if (!memory) {
+                return Response.json(
+                    { stored: false, reason: 'filtered_by_importance_or_duplicate' },
+                    { headers: corsHeaders(req) },
+                );
+            }
+
             return Response.json(
-                { stored: true, id: memory.id },
+                { stored: true, id: memory.id, usage_count: memory.usage_count },
                 { headers: corsHeaders(req) },
             );
         },
@@ -55,6 +68,7 @@ export function memoryRoutes(sessions: SessionManager) {
                 query: string;
                 limit?: number;
                 min_score?: number;
+                task_type?: TaskType;
             };
 
             if (!body.session_id || !body.query) {
@@ -76,17 +90,78 @@ export function memoryRoutes(sessions: SessionManager) {
                 query: body.query,
                 limit: body.limit,
                 minScore: body.min_score,
+                taskType: body.task_type,
             });
 
             return Response.json(
                 {
                     query: body.query,
+                    task_type: body.task_type ?? 'general',
                     count: results.length,
                     results: results.map((r) => ({
                         source: r.source,
                         content: r.memory.content,
                         score: r.score.totalScore,
+                        task_relevance: r.score.taskRelevance,
                         importance: r.memory.importance,
+                        usage_count: r.memory.usage_count,
+                        tags: r.memory.tags,
+                        timestamp: r.memory.timestamp,
+                    })),
+                },
+                { headers: corsHeaders(req) },
+            );
+        },
+
+        /**
+         * Unified context-aware memory query (Phase 1 API).
+         *
+         * Body: { session_id, task, context?, task_type?, limit? }
+         */
+        async queryMemory(req: Request): Promise<Response> {
+            const body = await req.json() as {
+                session_id: string;
+                task: string;
+                context?: string;
+                task_type?: TaskType;
+                limit?: number;
+            };
+
+            if (!body.session_id || !body.task) {
+                return Response.json(
+                    { error: 'session_id and task are required' },
+                    { status: 400, headers: corsHeaders(req) },
+                );
+            }
+
+            const agent = sessions.getSession(body.session_id);
+            if (!agent) {
+                return Response.json(
+                    { error: `Session ${body.session_id} not found` },
+                    { status: 404, headers: corsHeaders(req) },
+                );
+            }
+
+            const results = await agent.getMemoryManager().query({
+                task: body.task,
+                context: body.context,
+                taskType: body.task_type,
+                limit: body.limit,
+            });
+
+            return Response.json(
+                {
+                    task: body.task,
+                    task_type: body.task_type ?? 'inferred',
+                    count: results.length,
+                    results: results.map((r) => ({
+                        source: r.source,
+                        content: r.memory.content,
+                        score: r.score.totalScore,
+                        task_relevance: r.score.taskRelevance,
+                        importance: r.memory.importance,
+                        usage_count: r.memory.usage_count,
+                        tags: r.memory.tags,
                         timestamp: r.memory.timestamp,
                     })),
                 },

@@ -9,7 +9,12 @@
     "build": "tsc",
     "db:init": "bun run src/database/init.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:tc001": "vitest run src/tests/tc-001.write-filter.test.ts",
+    "test:tc002": "vitest run src/tests/tc-002.dedup.test.ts",
+    "test:tc003": "vitest run src/tests/tc-003.context-aware.test.ts",
+    "test:tc004": "vitest run src/tests/tc-004.composite-score.test.ts",
+    "test:tc005": "vitest run src/tests/tc-005.edge-cases.test.ts"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "^1.12.0",

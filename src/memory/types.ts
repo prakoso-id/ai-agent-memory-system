@@ -2,12 +2,19 @@
 // Memory System Type Definitions
 // ============================================================
 
+/** Task context types — drives context-aware retrieval scoring */
+export type TaskType = 'coding' | 'chat' | 'planning' | 'analysis' | 'general';
+
 /** Base memory record shared across all memory types */
 export interface BaseMemory {
     id: string;
     content: string;
-    timestamp: string;       // ISO 8601
-    importance: number;      // 0.0 – 1.0
+    timestamp: string;        // ISO 8601
+    importance: number;       // 0.0 – 1.0
+    usage_count: number;      // incremented on each retrieval or duplicate write
+    last_accessed: string;    // ISO 8601 — updated on each retrieval
+    tags?: string[];          // free-form classification tags (defaults to [])
+    source?: string;          // origin: 'episode:<id>', 'api', 'reflection', etc.
     metadata: Record<string, unknown>;
 }
 
@@ -27,7 +34,7 @@ export interface EpisodicMemory extends BaseMemory {
 
 export interface SemanticMemory extends BaseMemory {
     category: string;        // e.g. "user_preference", "project_fact", "general_knowledge"
-    source: string;          // where the knowledge came from
+    source: string;          // required for semantic: where the knowledge came from
     embedding?: number[];    // vector embedding
 }
 
@@ -69,11 +76,13 @@ export interface MemoryScore {
     semanticSimilarity: number;
     recency: number;
     importance: number;
+    taskRelevance: number;   // 0.0 – 1.0 based on tag overlap with task type
     totalScore: number;
 }
 
 export interface RetrievalQuery {
     query: string;
+    taskType?: TaskType;     // drives context-aware scoring
     limit?: number;
     minScore?: number;
     filters?: {
@@ -81,6 +90,8 @@ export interface RetrievalQuery {
         category?: string;
         sessionId?: string;
         timeRange?: { from?: string; to?: string };
+        tags?: string[];
+        source?: Array<RetrievedMemory['source']>;  // restrict to specific layers
     };
 }
 
@@ -90,10 +101,27 @@ export interface RetrievedMemory {
     score: MemoryScore;
 }
 
+// ---- Unified Query API ----
+
+/**
+ * Input for the unified memory.query() API.
+ * Combines task description + optional context for fully context-aware retrieval.
+ */
+export interface MemoryQueryInput {
+    /** What the agent is currently trying to do */
+    task: string;
+    /** Free-form context text that enriches the query (e.g. recent conversation) */
+    context?: string;
+    /** Explicit task type; inferred from `task` if omitted */
+    taskType?: TaskType;
+    /** Maximum number of results to return (default: system config limit) */
+    limit?: number;
+}
+
 // ---- Memory Lifecycle ----
 
 export interface ExtractionResult {
-    facts: Array<{ content: string; category: string; importance: number }>;
+    facts: Array<{ content: string; category: string; importance: number; tags?: string[] }>;
     entities: Array<{ name: string; label: string; properties: Record<string, unknown> }>;
     relationships: Array<{ source: string; target: string; relationship: string }>;
 }
