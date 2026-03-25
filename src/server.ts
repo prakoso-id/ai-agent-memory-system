@@ -16,6 +16,7 @@ import { sessionRoutes } from './api/routes/sessions.js';
  *   POST   /api/chat/sync        — Non-streaming chat
  *   POST   /api/memory/store     — Store a memory directly
  *   POST   /api/memory/search    — Semantic search
+ *   POST   /api/memory/query     — Unified context-aware query (Phase 1)
  *   GET    /api/memory/stats     — Memory statistics
  *   GET    /api/memory/graph     — Knowledge graph query
  *   POST   /api/sessions         — Create session
@@ -84,6 +85,9 @@ async function startServer(): Promise<void> {
                         if (method === 'POST' && path === '/api/memory/search') {
                             return memory.search(req);
                         }
+                        if (method === 'POST' && path === '/api/memory/query') {
+                            return memory.queryMemory(req);
+                        }
                         if (method === 'GET' && path === '/api/memory/stats') {
                             return memory.stats(req);
                         }
@@ -116,6 +120,7 @@ async function startServer(): Promise<void> {
                                     'POST /api/chat/sync',
                                     'POST /api/memory/store',
                                     'POST /api/memory/search',
+                                    'POST /api/memory/query',
                                     'GET  /api/memory/stats?session_id=',
                                     'GET  /api/memory/graph?session_id=&q=',
                                     'POST /api/sessions',

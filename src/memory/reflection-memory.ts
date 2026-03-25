@@ -8,15 +8,15 @@ import type { ReflectionMemory } from './types.js';
  */
 export class ReflectionMemoryService {
     /** Store a new reflection */
-    async store(reflection: Omit<ReflectionMemory, 'id' | 'timestamp'>): Promise<ReflectionMemory> {
+    async store(reflection: Omit<ReflectionMemory, 'id' | 'timestamp' | 'usage_count' | 'last_accessed'>): Promise<ReflectionMemory> {
         const id = uuid();
         const now = new Date().toISOString();
 
         await db.pg.query(
             `INSERT INTO reflection_memories
         (id, content, observation, root_cause, lesson_learned, strategy_improvement,
-         related_episode_ids, importance, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         related_episode_ids, importance, tags, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
             [
                 id,
                 reflection.content,
@@ -26,11 +26,12 @@ export class ReflectionMemoryService {
                 reflection.strategyImprovement,
                 reflection.relatedEpisodeIds,
                 reflection.importance,
+                reflection.tags ?? [],
                 JSON.stringify(reflection.metadata),
             ],
         );
 
-        return { ...reflection, id, timestamp: now };
+        return { ...reflection, id, timestamp: now, usage_count: 0, last_accessed: now, tags: reflection.tags ?? [] };
     }
 
     /** Get reflections relevant to a given topic */
@@ -87,6 +88,11 @@ export class ReflectionMemoryService {
             strategyImprovement: row.strategy_improvement as string,
             relatedEpisodeIds: (row.related_episode_ids as string[]) ?? [],
             importance: row.importance as number,
+            usage_count: (row.usage_count as number) ?? 0,
+            last_accessed: row.last_accessed
+                ? (row.last_accessed as Date).toISOString()
+                : (row.created_at as Date).toISOString(),
+            tags: (row.tags as string[]) ?? [],
             metadata: (row.metadata as Record<string, unknown>) ?? {},
             timestamp: (row.created_at as Date).toISOString(),
         };

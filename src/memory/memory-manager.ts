@@ -7,11 +7,15 @@ import { KnowledgeGraphService } from './knowledge-graph.js';
 import { ReflectionMemoryService } from './reflection-memory.js';
 import { MemoryExtraction } from './memory-extraction.js';
 import { MemoryConsolidation } from './memory-consolidation.js';
+import { rerank } from './utils/reranker.js';
+import { inferTaskType } from './utils/task-relevance.js';
 import type {
     ConversationMessage,
     RetrievedMemory,
     RetrievalQuery,
+    MemoryQueryInput,
     MemoryScore,
+    TaskType,
 } from './types.js';
 
 /**
@@ -20,8 +24,13 @@ import type {
  * Manages the full memory lifecycle:
  *   interaction → episodic → extraction → semantic + knowledge graph → reflection → consolidation
  *
- * Provides unified retrieval with weighted scoring:
- *   score = 0.4 × semantic_similarity + 0.3 × recency + 0.3 × importance
+ * Phase 1 additions:
+ *   • query()     — unified, context-aware memory query API
+ *   • retrieve()  — now accepts taskType for context-aware scoring
+ *   • Multi-stage retrieval pipeline:
+ *       1. Vector search (Qdrant)
+ *       2. Optional source/tag filter
+ *       3. Composite rerank (semantic · recency · importance · taskRelevance · popularity)
  */
 export class MemoryManager {
     public working: WorkingMemory;
@@ -42,6 +51,42 @@ export class MemoryManager {
         this.reflection = new ReflectionMemoryService();
         this.extraction = new MemoryExtraction();
         this.consolidation = new MemoryConsolidation(this.episodic, this.semantic);
+    }
+
+    // ====================================================================
+    // UNIFIED QUERY API  (Phase 1)
+    // ====================================================================
+
+    /**
+     * Unified memory query — the primary entry-point for agent memory access.
+     *
+     * Automatically:
+     *   • Infers task type when not provided
+     *   • Enriches the query with optional context
+     *   • Runs the full multi-stage retrieval pipeline
+     *
+     * @example
+     * const memories = await memory.query({
+     *   task: 'fix TypeScript compilation error',
+     *   context: 'tsconfig strict mode is enabled',
+     *   limit: 5,
+     * });
+     */
+    async query(input: MemoryQueryInput): Promise<RetrievedMemory[]> {
+        const taskType: TaskType = input.taskType ?? inferTaskType(input.task);
+
+        // Combine task + context into a richer query string
+        const queryText = input.context
+            ? `${input.task}\n\nContext: ${input.context}`
+            : input.task;
+
+        console.log(`  🧠 memory.query() taskType="${taskType}" task="${input.task.substring(0, 60)}"`);
+
+        return this.retrieve({
+            query: queryText,
+            taskType,
+            limit: input.limit,
+        });
     }
 
     // ====================================================================
@@ -79,6 +124,7 @@ export class MemoryManager {
                 content: `User: ${userMessage}\nAssistant: ${assistantResponse}`,
                 result: taskResult,
                 importance: 0.5,
+                tags: [],
                 metadata: { interactionNumber: this.interactionCount },
             });
             episodeId = episode.id;
@@ -97,27 +143,32 @@ export class MemoryManager {
                 { role: 'assistant', content: assistantResponse, timestamp: new Date().toISOString() },
             ];
             extracted = await this.extraction.extract(messages);
-            console.log(`    ✅ [3/6] Extraction complete: ${extracted.facts.length} facts, ${extracted.entities.length} entities, ${extracted.relationships.length} relationships`);
+            console.log(
+                `    ✅ [3/6] Extraction complete: ${extracted.facts.length} facts, ` +
+                `${extracted.entities.length} entities, ${extracted.relationships.length} rels`,
+            );
         } catch (err) {
             console.error('    ❌ [3/6] Knowledge extraction failed:', err);
         }
 
-        // 4. Store extracted facts in semantic memory (Qdrant)
+        // 4. Store extracted facts in semantic memory (filtered by importance + novelty)
+        let storedFacts = 0;
+        let skippedFacts = 0;
         try {
             for (const fact of extracted.facts) {
-                await this.semantic.store({
+                const result = await this.semantic.store({
                     content: fact.content,
                     category: fact.category,
                     source: `episode:${episodeId}`,
                     importance: fact.importance,
+                    tags: fact.tags ?? [fact.category],
                     metadata: { episodeId },
                 });
+                result ? storedFacts++ : skippedFacts++;
             }
-            if (extracted.facts.length > 0) {
-                console.log(`    ✅ [4/6] ${extracted.facts.length} facts stored in semantic memory`);
-            } else {
-                console.log('    ⚪ [4/6] No facts to store in semantic memory');
-            }
+            console.log(
+                `    ✅ [4/6] Semantic memory: ${storedFacts} stored, ${skippedFacts} filtered`,
+            );
         } catch (err) {
             console.error('    ❌ [4/6] Semantic memory storage failed:', err);
         }
@@ -141,7 +192,10 @@ export class MemoryManager {
                 });
             }
             if (extracted.entities.length > 0 || extracted.relationships.length > 0) {
-                console.log(`    ✅ [5/6] Knowledge graph updated (${extracted.entities.length} nodes, ${extracted.relationships.length} edges)`);
+                console.log(
+                    `    ✅ [5/6] Knowledge graph: ${extracted.entities.length} nodes, ` +
+                    `${extracted.relationships.length} edges`,
+                );
             } else {
                 console.log('    ⚪ [5/6] No graph updates');
             }
@@ -173,18 +227,24 @@ export class MemoryManager {
     }
 
     // ====================================================================
-    // UNIFIED RETRIEVAL
+    // UNIFIED RETRIEVAL (multi-stage pipeline)
     // ====================================================================
 
     /**
      * Retrieve the most relevant memories across all layers.
-     * Uses weighted scoring: 0.4 similarity + 0.3 recency + 0.3 importance
+     *
+     * Stage 1 — vector search per layer (semantic / reflection / knowledge graph)
+     * Stage 2 — optional source filter  (via query.filters.source)
+     * Stage 3 — composite rerank        (semantic · recency · importance · taskRelevance · popularity)
      */
     async retrieve(query: RetrievalQuery): Promise<RetrievedMemory[]> {
         const limit = query.limit ?? config.agent.memoryRetrievalLimit;
-        const results: RetrievedMemory[] = [];
+        const taskType: TaskType = query.taskType ?? 'general';
+        const candidates: RetrievedMemory[] = [];
 
-        // 1. Semantic search (main source)
+        // Stage 1 — collect candidates from all layers
+
+        // 1a. Semantic search (primary vector source)
         try {
             const semanticResults = await this.semantic.search(query.query, {
                 limit: limit * 2,
@@ -199,34 +259,35 @@ export class MemoryManager {
                     semanticSimilarity: mem.score,
                     recency,
                     importance: mem.importance,
-                    totalScore: 0.4 * mem.score + 0.3 * recency + 0.3 * mem.importance,
+                    taskRelevance: 0,   // filled by reranker
+                    totalScore: 0,      // filled by reranker
                 };
-                results.push({ memory: mem, source: 'semantic', score });
+                candidates.push({ memory: mem, source: 'semantic', score });
             }
         } catch (error) {
             console.error('Semantic retrieval failed:', error);
         }
 
-        // 2. Reflection memories
+        // 1b. Reflection memories
         try {
             const reflections = await this.reflection.getRelevant(query.query, 3);
             for (const ref of reflections) {
                 const recency = this.calculateRecency(ref.timestamp);
-                const similarity = 0.6; // approximate for text-match based retrieval
                 const score: MemoryScore = {
                     memoryId: ref.id,
-                    semanticSimilarity: similarity,
+                    semanticSimilarity: 0.6,
                     recency,
                     importance: ref.importance,
-                    totalScore: 0.4 * similarity + 0.3 * recency + 0.3 * ref.importance,
+                    taskRelevance: 0,
+                    totalScore: 0,
                 };
-                results.push({ memory: ref, source: 'reflection', score });
+                candidates.push({ memory: ref, source: 'reflection', score });
             }
         } catch (error) {
             console.error('Reflection retrieval failed:', error);
         }
 
-        // 3. Knowledge graph context
+        // 1c. Knowledge graph context
         try {
             const nodes = await this.knowledgeGraph.query(query.query);
             for (const node of nodes.slice(0, 3)) {
@@ -242,14 +303,18 @@ export class MemoryManager {
                         semanticSimilarity: 0.5,
                         recency,
                         importance: 0.7,
-                        totalScore: 0.4 * 0.5 + 0.3 * recency + 0.3 * 0.7,
+                        taskRelevance: 0,
+                        totalScore: 0,
                     };
-                    results.push({
+                    candidates.push({
                         memory: {
                             id: node.id,
                             content: graphContext,
                             timestamp: node.createdAt,
                             importance: 0.7,
+                            usage_count: 0,
+                            last_accessed: node.updatedAt,
+                            tags: ['knowledge_graph', node.label?.toLowerCase() ?? ''],
                             metadata: { type: 'knowledge_graph', nodeName: node.name },
                         },
                         source: 'knowledge_graph',
@@ -261,9 +326,12 @@ export class MemoryManager {
             console.error('Knowledge graph retrieval failed:', error);
         }
 
-        // Sort by total score and return top-k
-        results.sort((a, b) => b.score.totalScore - a.score.totalScore);
-        return results.slice(0, limit);
+        // Stages 2 & 3 — filter + composite rerank
+        return rerank(candidates, {
+            taskType,
+            sourceFilter: query.filters?.source,
+            limit,
+        });
     }
 
     // ====================================================================
@@ -292,11 +360,10 @@ export class MemoryManager {
     // HELPERS
     // ====================================================================
 
-    /** Calculate recency score (1.0 = now, decays over hours) */
+    /** Calculate recency score (1.0 = now, exponential decay, ~48h half-life) */
     private calculateRecency(timestamp: string): number {
         const ageMs = Date.now() - new Date(timestamp).getTime();
         const ageHours = ageMs / (1000 * 60 * 60);
-        // Exponential decay: half-life of ~48 hours
         return Math.exp(-0.014 * ageHours);
     }
 }
