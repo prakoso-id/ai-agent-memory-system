@@ -43,6 +43,13 @@ export const config = {
         memoryDecayFactor: parseFloat(process.env.MEMORY_DECAY_FACTOR || '0.01'),
         workingMemoryTTL: parseInt(process.env.WORKING_MEMORY_TTL || '3600'),
     },
+
+    // Server settings
+    server: {
+        port: parseInt(process.env.API_PORT || '3001'),
+        corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',').map(s => s.trim()),
+        apiKeys: (process.env.API_KEYS || 'dev-key-change-me').split(',').map(s => s.trim()),
+    },
 } as const;
 
 export type Config = typeof config;
