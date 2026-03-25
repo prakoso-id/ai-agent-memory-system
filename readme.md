@@ -517,13 +517,15 @@ src/
     └── prompt-builder.ts        # Memory-augmented prompts
 ```
 
-## Tech Stack
+## Technical Summary
 
-- **Runtime**: [Bun](https://bun.sh)
+- **Runtime**: [Bun](https://bun.sh), Node.js
 - **Language**: TypeScript
-- **LLM**: LM Studio / OpenRouter (OpenAI-compatible API)
-- **Databases**: Redis · PostgreSQL · Qdrant · Neo4j
-- **Orchestration**: Docker Compose
+- **Backend**: REST API (Bun.serve), SSE Streaming
+- **Database**: PostgreSQL, Redis, Qdrant (Vector DB), Neo4j (Graph DB)
+- **DevOps**: Docker, Docker Compose
+- **Tools**: Git, Vitest (Testing)
+- **AI/LLM**: OpenAI SDK, LM Studio, OpenRouter, Vector Embeddings (Qdrant), Prompt Design
 
 ## License
 
