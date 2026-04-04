@@ -1,21 +1,30 @@
 import { llm } from '../llm/llm-client.js';
+import { config } from '../config/index.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { ReflectionEngine } from '../reflection/reflection-engine.js';
+import { ContextBuilder } from './context-builder.js';
 import { PromptBuilder } from './prompt-builder.js';
+import { BehaviorEngine } from '../reflection/behavior-engine.js';
 
 /**
  * Agent Controller — main orchestration loop.
  *
  * Flow per interaction:
- *   1. Retrieve relevant memories
- *   2. Build memory-augmented prompt
+ *   1. Build token-budgeted context (Phase 2: ContextBuilder)
+ *   2. Build memory-augmented prompt (with strategies + directives)
  *   3. Send to LLM
  *   4. Process response through memory pipeline
  *   5. Trigger reflection on important interactions
+ *
+ * Phase 2 additions:
+ *   • ContextBuilder for token-aware context assembly
+ *   • Strategy + directive injection into prompts
+ *   • Retrieval feedback recording
  */
 export class AgentController {
     private memory: MemoryManager;
     private reflection: ReflectionEngine;
+    private contextBuilder: ContextBuilder;
     private promptBuilder: PromptBuilder;
 
     constructor(sessionId?: string) {
@@ -23,6 +32,12 @@ export class AgentController {
         this.reflection = new ReflectionEngine(
             this.memory.reflection,
             this.memory.knowledgeGraph,
+            this.memory.strategies,
+        );
+        this.contextBuilder = new ContextBuilder(
+            this.memory,
+            this.memory.strategies,
+            this.reflection.behavior,
         );
         this.promptBuilder = new PromptBuilder();
     }
@@ -36,11 +51,28 @@ export class AgentController {
      */
     async chat(userMessage: string): Promise<string> {
         try {
-            const memories = await this.memory.retrieve({ query: userMessage });
-            console.log(`  🧠 Retrieved ${memories.length} memories (top score: ${memories[0]?.score.totalScore.toFixed(3) ?? 'N/A'})`);
+            // Phase 2: Build token-budgeted context
+            const context = await this.contextBuilder.buildContext({
+                query: userMessage,
+                max_tokens: config.contextBuilder.defaultMaxTokens,
+                priority: ['relevant', 'important', 'recent'],
+                include_strategies: true,
+                include_directives: true,
+            });
+
+            console.log(
+                `  🧠 Context: ${context.memories.length} memories, ` +
+                `${context.strategies.length} strategies, ` +
+                `${context.directives.length} directives` +
+                `${context.compressionApplied ? ' (compressed)' : ''}`,
+            );
 
             const history = await this.memory.working.getMessages();
-            const messages = this.promptBuilder.buildMessages(userMessage, history, memories);
+            const messages = this.promptBuilder.buildMessagesFromContext(
+                userMessage,
+                history,
+                context,
+            );
             const response = await llm.chat(messages);
 
             await this.memory.processInteraction(userMessage, response);
@@ -63,27 +95,38 @@ export class AgentController {
 
     /**
      * Stream a chat response token by token via SSE-compatible events.
-     * Yields: { type: 'memory' } → { type: 'token' }... → { type: 'done' }
+     * Yields: { type: 'context' } → { type: 'token' }... → { type: 'done' }
      * Memory pipeline runs after the stream completes.
      */
     async *chatStream(userMessage: string): AsyncGenerator<
-        | { type: 'memory'; count: number; topScore: number | null }
+        | { type: 'context'; memoryCount: number; strategyCount: number; directiveCount: number; compressed: boolean }
         | { type: 'token'; content: string }
         | { type: 'done'; fullResponse: string }
     > {
-        // 1. Retrieve relevant memories
-        const memories = await this.memory.retrieve({ query: userMessage });
-        console.log(`  🧠 Retrieved ${memories.length} memories (top score: ${memories[0]?.score.totalScore.toFixed(3) ?? 'N/A'})`);
+        // 1. Build token-budgeted context
+        const context = await this.contextBuilder.buildContext({
+            query: userMessage,
+            max_tokens: config.contextBuilder.defaultMaxTokens,
+            priority: ['relevant', 'important', 'recent'],
+            include_strategies: true,
+            include_directives: true,
+        });
 
         yield {
-            type: 'memory',
-            count: memories.length,
-            topScore: memories[0]?.score.totalScore ?? null,
+            type: 'context',
+            memoryCount: context.memories.length,
+            strategyCount: context.strategies.length,
+            directiveCount: context.directives.length,
+            compressed: context.compressionApplied,
         };
 
         // 2. Get history + build prompt
         const history = await this.memory.working.getMessages();
-        const messages = this.promptBuilder.buildMessages(userMessage, history, memories);
+        const messages = this.promptBuilder.buildMessagesFromContext(
+            userMessage,
+            history,
+            context,
+        );
 
         // 3. Stream LLM response
         let fullResponse = '';
@@ -125,8 +168,24 @@ export class AgentController {
         return this.memory;
     }
 
+    /** Get the context builder for direct API access */
+    getContextBuilder(): ContextBuilder {
+        return this.contextBuilder;
+    }
+
     /** Force a memory consolidation cycle */
     async consolidate(): Promise<void> {
         await this.memory.consolidation.consolidate();
+    }
+
+    /**
+     * Record feedback on retrieved memories (Phase 2).
+     * Call after each interaction with information about which memories were useful.
+     */
+    async recordFeedback(
+        query: string,
+        feedback: Array<{ memory_id: string; used: boolean; helpful: boolean }>,
+    ): Promise<void> {
+        await this.memory.recordFeedback(query, feedback);
     }
 }

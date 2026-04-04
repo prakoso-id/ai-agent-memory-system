@@ -1,21 +1,35 @@
 import { llm } from '../llm/llm-client.js';
 import { ReflectionMemoryService } from '../memory/reflection-memory.js';
 import { KnowledgeGraphService } from '../memory/knowledge-graph.js';
+import { StrategyMemoryService } from '../memory/strategy-memory.js';
+import { BehaviorEngine } from './behavior-engine.js';
 import type { EpisodicMemory, ReflectionMemory } from '../memory/types.js';
 
 /**
  * Reflection Engine — post-task analysis.
+ *
  * Generates structured reflections: observation, root cause, lesson, strategy.
+ *
+ * Phase 2 additions:
+ *   • Extracts behavioral directives via BehaviorEngine
+ *   • Detects reusable strategies and persists them to StrategyMemoryService
  */
 export class ReflectionEngine {
+    public behavior: BehaviorEngine;
+
     constructor(
         private reflectionMemory: ReflectionMemoryService,
         private knowledgeGraph: KnowledgeGraphService,
-    ) { }
+        private strategies: StrategyMemoryService,
+    ) {
+        this.behavior = new BehaviorEngine();
+    }
 
     /**
      * Analyze a completed task and generate a reflection.
      * Called after task completion (especially on failure or partial success).
+     *
+     * Phase 2: also extracts behavioral directives and reusable strategies.
      */
     async reflect(episode: EpisodicMemory): Promise<ReflectionMemory | null> {
         // Only reflect on task executions and non-trivial conversations
@@ -28,12 +42,16 @@ export class ReflectionEngine {
                 lessonLearned: string;
                 strategyImprovement: string;
                 shouldRemember: boolean;
+                isReusableStrategy: boolean;
+                strategyDomain?: string;
             }>([
                 {
                     role: 'system',
                     content: `You are a self-reflection engine for an AI agent. Analyze the agent's interaction and extract actionable lessons.
 
-Your goal is to help the agent improve over time by identifying patterns, mistakes, and successful strategies.`,
+Your goal is to help the agent improve over time by identifying patterns, mistakes, and successful strategies.
+
+Additionally, determine if the lesson represents a reusable strategy pattern — something that could apply broadly across similar situations (e.g., "comparison tables work better than prose for feature comparisons").`,
                 },
                 {
                     role: 'user',
@@ -50,7 +68,9 @@ Respond as JSON:
   "rootCause": "Why did it succeed/fail, or what was the key dynamic",
   "lessonLearned": "What the agent should remember for the future",
   "strategyImprovement": "How the agent should approach similar situations next time",
-  "shouldRemember": true/false (is this reflection worth persisting?)
+  "shouldRemember": true/false (is this reflection worth persisting?),
+  "isReusableStrategy": true/false (is this a reusable pattern beyond this specific case?),
+  "strategyDomain": "content_format" | "response_style" | "problem_solving" | "retrieval" | "communication" (if isReusableStrategy is true)
 }`,
                 },
             ]);
@@ -81,6 +101,32 @@ Respond as JSON:
                     strategy: reflection.strategyImprovement,
                 },
             });
+
+            // Phase 2: Extract behavioral directives from this reflection
+            try {
+                await this.behavior.extractDirectives([stored]);
+            } catch (error) {
+                console.error('Behavioral directive extraction failed:', error);
+            }
+
+            // Phase 2: Store as reusable strategy if applicable
+            if (reflection.isReusableStrategy && reflection.strategyDomain) {
+                try {
+                    await this.strategies.store({
+                        pattern: reflection.strategyImprovement,
+                        evidence: reflection.observation,
+                        effectiveness: 0.5, // start neutral, let outcomes adjust
+                        domain: reflection.strategyDomain,
+                        metadata: {
+                            sourceReflectionId: stored.id,
+                            episodeResult: episode.result,
+                        },
+                    });
+                    console.log(`  📊 Stored reusable strategy in domain "${reflection.strategyDomain}"`);
+                } catch (error) {
+                    console.error('Strategy storage failed:', error);
+                }
+            }
 
             return stored;
         } catch (error) {

@@ -1,29 +1,45 @@
 # 🧠 AI Agent Memory System
 
-A **multi-layer cognitive memory service** for AI agents. Provides persistent memory storage, semantic retrieval, knowledge graphs, and reflection — accessible via REST API.
+A **multi-layer cognitive memory service** for AI agents. Provides persistent memory storage, semantic retrieval, knowledge graphs, reflection-based learning, and adaptive context optimization — accessible via REST API.
 
 > **Use this as a standalone memory backend for any AI agent project.**
+
+---
 
 ## Architecture
 
 ```
 ┌────────────────────────────────────────────────┐
-│  Your AI Agent Project                          │
-│  (PM Agent, Content Planner, Chatbot, etc.)     │
+│  Your AI Agent Project                         │
+│  (PM Agent, Content Planner, Chatbot, etc.)    │
 └──────────────────┬─────────────────────────────┘
                    │ REST API (HTTP)
 ┌──────────────────┴─────────────────────────────┐
-│  Memory System API (localhost:3001)              │
-│                                                  │
-│  ┌─────────┐ ┌──────────┐ ┌─────────────────┐  │
-│  │ Working  │ │ Episodic │ │ Semantic Search │  │
-│  │ (Redis)  │ │  (PG)    │ │   (Qdrant)      │  │
-│  └─────────┘ └──────────┘ └─────────────────┘  │
-│  ┌──────────────┐ ┌────────────────────────┐    │
-│  │ Knowledge    │ │ Reflection Engine      │    │
-│  │ Graph (Neo4j)│ │ (learns from history)  │    │
-│  └──────────────┘ └────────────────────────┘    │
-└─────────────────────────────────────────────────┘
+│  Memory System API (localhost:3001)            │
+│                                                │
+│  ┌──────────┐ ┌──────────┐ ┌────────────────┐  │
+│  │ Working  │ │ Episodic │ │ Semantic Search│  │
+│  │  (Redis) │ │   (PG)   │ │   (Qdrant)     │  │
+│  └──────────┘ └──────────┘ └────────────────┘  │
+│  ┌──────────────┐ ┌────────────────────────┐   │
+│  │ Knowledge    │ │ Reflection Engine      │   │
+│  │ Graph (Neo4j)│ │ (learns from history)  │   │
+│  └──────────────┘ └────────────────────────┘   │
+│                                                │
+│  ╔══════════════ Phase 2 ════════════════════╗ │
+│  ║  ┌─────────────┐  ┌───────────────────┐   ║ │
+│  ║  │ Feedback    │  │ Context Builder   │   ║ │
+│  ║  │ Tracker     │  │ (token-aware)     │   ║ │
+│  ║  └─────────────┘  └───────────────────┘   ║ │
+│  ║  ┌─────────────┐  ┌───────────────────┐   ║ │
+│  ║  │ Strategy    │  │ Behavior Engine   │   ║ │
+│  ║  │ Memory      │  │ (reflection→act)  │   ║ │
+│  ║  └─────────────┘  └───────────────────┘   ║ │
+│  ║  ┌─────────────────────────────────────┐  ║ │
+│  ║  │ Context Compressor (raw→sum→insight)│  ║ │
+│  ║  └─────────────────────────────────────┘  ║ │
+│  ╚═══════════════════════════════════════════╝ │
+└────────────────────────────────────────────────┘
 ```
 
 ### Memory Layers
@@ -35,12 +51,107 @@ A **multi-layer cognitive memory service** for AI agents. Provides persistent me
 | **Semantic** | Qdrant | Extracted facts with vector embeddings | Permanent |
 | **Knowledge Graph** | Neo4j | Entity relationships (User→prefers→TypeScript) | Permanent |
 | **Reflection** | PostgreSQL | Learned lessons & strategy improvements | Permanent |
+| **Strategy** *(Phase 2)* | PostgreSQL | Reusable behavioral patterns | Permanent |
 
 ### Retrieval Scoring
 
+Composite multi-signal scoring with adaptive weights:
+
 ```
-totalScore = 0.4 × semantic_similarity + 0.3 × recency + 0.3 × importance
+totalScore = w₁ × semantic_similarity
+           + w₂ × recency
+           + w₃ × importance
+           + w₄ × task_relevance
+           + w₅ × usage_popularity
+           × feedback_boost(memory_id)
 ```
+
+**Default weights** (Phase 1): `w₁=0.35  w₂=0.25  w₃=0.20  w₄=0.10  w₅=0.10`
+
+**Adaptive weights** (Phase 2): Shift automatically based on retrieval feedback signals. When results are frequently unhelpful, the system boosts importance + recency; when consistently helpful, it reinforces semantic similarity.
+
+**Feedback boost**: Per-memory multiplier from `0.5` (consistently unhelpful) to `1.5` (consistently helpful), with Bayesian smoothing.
+
+---
+
+## Development Phases
+
+### Phase 1 — Foundation: Filtering & Smart Retrieval
+
+> `865f89b` feat(memory): implement Phase 1 foundation (filtering & smart retrieval)
+
+Built the intelligent retrieval pipeline that makes memory useful, not just stored.
+
+| Feature | Description | Files |
+|---------|-------------|-------|
+| **Write Filter** | Discard noise — memories below importance `0.15` are never stored | `utils/write-filter.ts` |
+| **Duplicate Detection** | Semantic dedup via cosine similarity (`≥0.92`). Duplicates bump `usage_count` instead of creating new records | `semantic-memory.ts` |
+| **Context-Aware Retrieval** | `taskType` inference (`coding`, `planning`, `chat`, `debugging`) biases scoring toward relevant tags | `utils/task-relevance.ts` |
+| **Multi-Stage Reranker** | Stage 1: Vector search → Stage 2: Source filter → Stage 3: Composite score (5 signals) | `utils/reranker.ts` |
+| **Unified Query API** | `memory.query({ task, context, taskType })` — single entry-point to all memory layers | `memory-manager.ts` |
+
+**Test suites (5):**
+
+| Test | Scenario | Tests |
+|------|----------|-------|
+| TC-001 | Write filter rejects noise, stores important facts | 7 |
+| TC-002 | Duplicate detection via `usage_count` increment | 7 |
+| TC-003 | Context-aware retrieval reranks by `taskType` | 8 |
+| TC-004 | Composite score balances importance + popularity vs recency | 8 |
+| TC-005 | Edge cases: non-duplicate + irrelevance exclusion | 9 |
+
+---
+
+### Phase 2 — Adaptive Learning & Context Optimization
+
+Built the learning loop that makes the agent improve over time:
+
+| Module | Description | Files |
+|--------|-------------|-------|
+| **Feedback Tracker** | Records per-memory `used/helpful` feedback. Computes per-memory boost (`0.5–1.5×`) and adaptive reranking weights from aggregate signals | `feedback-tracker.ts` |
+| **Strategy Memory** | Stores reusable patterns like *"comparison tables work better than prose"* with effectiveness tracking (EMA, α=0.2) and domain classification | `strategy-memory.ts` |
+| **Context Compression** | Hierarchical compression pipeline: `raw → summary → insight`. Budget-aware batch compression starts with lowest-scored memories first | `context-compression.ts` |
+| **Behavior Engine** | Bridges reflections to action. Extracts `retrieval_bias`, `prompt_style`, `content_preference` directives from reflection data via LLM | `behavior-engine.ts` |
+| **Context Builder** | Main Phase 2 consumer API. Orchestrates: retrieval → priority sorting → strategy injection → directive injection → token-budgeted compression | `context-builder.ts` |
+
+**New database tables:**
+
+| Table | Purpose | Key Columns |
+|-------|---------|-------------|
+| `retrieval_feedback` | Adaptive scoring signal | `memory_id`, `used`, `helpful` |
+| `strategy_memories` | Reusable patterns | `pattern`, `effectiveness`, `domain` |
+| `behavioral_directives` | Reflection-to-behavior bridge | `type`, `directive`, `weight`, `active` |
+
+**Updated modules:**
+
+| Module | Changes |
+|--------|---------|
+| `reranker.ts` | Accepts adaptive weights + per-memory feedback boosts |
+| `memory-manager.ts` | Wires FeedbackTracker + StrategyMemory into retrieval pipeline |
+| `prompt-builder.ts` | `buildMessagesFromContext(BuiltContext)` with strategy & directive prompt sections |
+| `reflection-engine.ts` | Auto-extracts behavioral directives and reusable strategies from reflections |
+| `agent-controller.ts` | Uses ContextBuilder for token-aware context assembly |
+
+**Context Builder API:**
+
+```typescript
+const ctx = await contextBuilder.buildContext({
+  query: 'fix TypeScript error in auth handler',
+  max_tokens: 2048,
+  priority: ['relevant', 'important', 'recent'],
+  include_strategies: true,
+  include_directives: true,
+});
+// Returns: { memories, strategies, directives, totalTokens, compressionApplied }
+```
+
+**Test suites (3):**
+
+| Test | Scenario | Tests |
+|------|----------|-------|
+| TC-006 | Adaptive learning: feedback boosts shift retrieval rankings (A-boost=1.42 vs B-boost=0.64, 50% score gap) | 10 |
+| TC-007 | Reflection impact: directives extracted from reflections shape prompt assembly | 15 |
+| TC-008 | Context compression: 8 memories compressed to fit 200-token budget via hierarchical summarization | 16 |
 
 ---
 
@@ -82,6 +193,29 @@ bun run server
 
 # CLI mode (interactive chat)
 bun run dev
+```
+
+### 4. Test
+
+```bash
+# Run all tests (8 suites, 80 tests)
+bun run test
+
+# Run individual Phase 1 tests
+bun run test:tc001    # Write filter
+bun run test:tc002    # Duplicate detection
+bun run test:tc003    # Context-aware retrieval
+bun run test:tc004    # Composite scoring
+bun run test:tc005    # Edge cases
+
+# Run individual Phase 2 tests
+bun run test:tc006    # Adaptive learning
+bun run test:tc007    # Reflection impact
+bun run test:tc008    # Context compression
+
+# Run examples
+bun run example:phase1
+bun run example:phase2
 ```
 
 ---
@@ -279,6 +413,7 @@ Authorization: Bearer <API_KEY>
   "semantic": 8,
   "reflections": 2,
   "graphNodes": 15,
+  "strategies": 3,
   "interactions": 12
 }
 ```
@@ -478,6 +613,9 @@ All settings are in `.env`:
 | `MEMORY_RETRIEVAL_LIMIT` | `7` | Max memories per retrieval |
 | `MEMORY_DECAY_FACTOR` | `0.01` | Exponential decay rate |
 | `WORKING_MEMORY_TTL` | `3600` | Session TTL in seconds |
+| **Context Builder** *(Phase 2)* | | |
+| `CONTEXT_MAX_TOKENS` | `2048` | Token budget for context assembly |
+| `COMPRESSION_THRESHOLD` | `0.7` | Compression trigger threshold |
 
 ---
 
@@ -485,36 +623,58 @@ All settings are in `.env`:
 
 ```
 src/
-├── server.ts                     # REST API server (Bun.serve)
-├── index.ts                      # CLI entry point
-├── config/index.ts               # Environment config
+├── server.ts                      # REST API server (Bun.serve)
+├── index.ts                       # CLI entry point
+├── config/index.ts                # Environment config
 ├── api/
-│   ├── middleware.ts             # Auth, CORS, request logging
-│   ├── session-manager.ts       # Multi-session AgentController pool
+│   ├── middleware.ts              # Auth, CORS, request logging
+│   ├── session-manager.ts        # Multi-session AgentController pool
 │   └── routes/
-│       ├── chat.ts              # SSE streaming + sync chat
-│       ├── memory.ts            # Store, search, stats, graph
-│       └── sessions.ts          # Session CRUD
+│       ├── chat.ts               # SSE streaming + sync chat
+│       ├── memory.ts             # Store, search, stats, graph
+│       └── sessions.ts           # Session CRUD
 ├── database/
-│   ├── connections.ts           # DB connection manager
-│   └── init.ts                  # Schema initialization
+│   ├── connections.ts            # DB connection manager
+│   └── init.ts                   # Schema initialization (Phase 1 + Phase 2 tables)
 ├── llm/
-│   └── llm-client.ts           # LLM client (chat, stream, embed)
+│   └── llm-client.ts            # LLM client (chat, stream, embed, chatJSON)
 ├── memory/
-│   ├── types.ts                 # Type definitions
-│   ├── working-memory.ts        # Redis working memory
-│   ├── episodic-memory.ts       # PostgreSQL episodic memory
-│   ├── semantic-memory.ts       # Qdrant vector memory
-│   ├── knowledge-graph.ts       # Neo4j knowledge graph
-│   ├── reflection-memory.ts     # Reflection storage
-│   ├── memory-manager.ts        # Central orchestrator
-│   ├── memory-extraction.ts     # LLM knowledge extraction
-│   └── memory-consolidation.ts  # Decay, merge, summarize
+│   ├── types.ts                  # Type definitions (all phases)
+│   ├── working-memory.ts         # Redis working memory
+│   ├── episodic-memory.ts        # PostgreSQL episodic memory
+│   ├── semantic-memory.ts        # Qdrant vector memory + dedup
+│   ├── knowledge-graph.ts        # Neo4j knowledge graph
+│   ├── reflection-memory.ts      # Reflection storage
+│   ├── memory-manager.ts         # Central orchestrator
+│   ├── memory-extraction.ts      # LLM knowledge extraction
+│   ├── memory-consolidation.ts   # Decay, merge, summarize
+│   ├── feedback-tracker.ts       # [Phase 2] Retrieval feedback + adaptive weights
+│   ├── strategy-memory.ts        # [Phase 2] Reusable pattern storage
+│   ├── context-compression.ts    # [Phase 2] Hierarchical compression (raw→summary→insight)
+│   └── utils/
+│       ├── reranker.ts           # Multi-signal composite scorer (adaptive)
+│       ├── task-relevance.ts     # Task-type inference + tag scoring
+│       └── write-filter.ts       # Importance + novelty gate
 ├── reflection/
-│   └── reflection-engine.ts     # Post-task reflection
-└── agent/
-    ├── agent-controller.ts      # Agent orchestration (chat + stream)
-    └── prompt-builder.ts        # Memory-augmented prompts
+│   ├── reflection-engine.ts      # Post-task reflection + strategy extraction
+│   └── behavior-engine.ts        # [Phase 2] Reflection → behavioral directives
+├── agent/
+│   ├── agent-controller.ts       # Agent orchestration (chat + stream)
+│   ├── prompt-builder.ts         # Memory-augmented prompts (supports BuiltContext)
+│   └── context-builder.ts        # [Phase 2] Token-aware context assembly
+├── examples/
+│   ├── phase1-usage.ts           # Phase 1 feature demo
+│   └── phase2-usage.ts           # Phase 2 feature demo
+└── tests/
+    ├── helpers.ts                # Shared test utilities + cleanup
+    ├── tc-001.write-filter.test.ts
+    ├── tc-002.dedup.test.ts
+    ├── tc-003.context-aware.test.ts
+    ├── tc-004.composite-score.test.ts
+    ├── tc-005.edge-cases.test.ts
+    ├── tc-006.adaptive-learning.test.ts    # [Phase 2]
+    ├── tc-007.reflection-impact.test.ts    # [Phase 2]
+    └── tc-008.context-compression.test.ts  # [Phase 2]
 ```
 
 ## Technical Summary
@@ -524,8 +684,9 @@ src/
 - **Backend**: REST API (Bun.serve), SSE Streaming
 - **Database**: PostgreSQL, Redis, Qdrant (Vector DB), Neo4j (Graph DB)
 - **DevOps**: Docker, Docker Compose
-- **Tools**: Git, Vitest (Testing)
-- **AI/LLM**: OpenAI SDK, LM Studio, OpenRouter, Vector Embeddings (Qdrant), Prompt Design
+- **Testing**: Vitest (8 suites, 80 tests — all against real databases)
+- **AI/LLM**: OpenAI SDK, LM Studio, OpenRouter, Vector Embeddings (Qdrant), Prompt Engineering
+- **Key Patterns**: Adaptive retrieval scoring, hierarchical context compression, reflection-to-behavior pipeline, semantic deduplication, multi-stage reranking
 
 ## License
 

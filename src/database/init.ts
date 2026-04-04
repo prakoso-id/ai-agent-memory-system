@@ -126,6 +126,57 @@ export async function initializeDatabase(): Promise<void> {
         await neo4jSession.close();
     }
 
+    // ---- Phase 2: Retrieval Feedback Table ----
+    await db.pg.query(`
+    CREATE TABLE IF NOT EXISTS retrieval_feedback (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      memory_id     VARCHAR(200) NOT NULL,
+      query         TEXT NOT NULL,
+      used          BOOLEAN NOT NULL DEFAULT false,
+      helpful       BOOLEAN NOT NULL DEFAULT false,
+      created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_feedback_memory  ON retrieval_feedback(memory_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_created ON retrieval_feedback(created_at DESC);
+  `);
+    console.log('  ✅ retrieval_feedback table ready');
+
+    // ---- Phase 2: Strategy Memories Table ----
+    await db.pg.query(`
+    CREATE TABLE IF NOT EXISTS strategy_memories (
+      id              UUID PRIMARY KEY,
+      pattern         TEXT NOT NULL,
+      evidence        TEXT NOT NULL,
+      effectiveness   REAL NOT NULL DEFAULT 0.5,
+      domain          VARCHAR(100) NOT NULL,
+      usage_count     INTEGER NOT NULL DEFAULT 0,
+      last_validated  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      metadata        JSONB DEFAULT '{}',
+      created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_strategy_domain  ON strategy_memories(domain);
+    CREATE INDEX IF NOT EXISTS idx_strategy_effect  ON strategy_memories(effectiveness DESC);
+  `);
+    console.log('  ✅ strategy_memories table ready');
+
+    // ---- Phase 2: Behavioral Directives Table ----
+    await db.pg.query(`
+    CREATE TABLE IF NOT EXISTS behavioral_directives (
+      id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      type                   VARCHAR(50) NOT NULL,
+      directive              TEXT NOT NULL,
+      weight                 REAL NOT NULL DEFAULT 0.5,
+      source_reflection_id   TEXT,
+      active                 BOOLEAN NOT NULL DEFAULT true,
+      created_at             TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_directive_active ON behavioral_directives(active) WHERE active = true;
+  `);
+    console.log('  ✅ behavioral_directives table ready');
+
     console.log('\n📦 All schemas initialized.\n');
 }
 

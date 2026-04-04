@@ -44,6 +44,12 @@ export const config = {
         workingMemoryTTL: parseInt(process.env.WORKING_MEMORY_TTL || '3600'),
     },
 
+    // Context Builder (Phase 2)
+    contextBuilder: {
+        defaultMaxTokens: parseInt(process.env.CONTEXT_MAX_TOKENS || '2048'),
+        compressionThreshold: parseFloat(process.env.COMPRESSION_THRESHOLD || '0.7'),
+    },
+
     // Server settings
     server: {
         port: parseInt(process.env.API_PORT || '3001'),
