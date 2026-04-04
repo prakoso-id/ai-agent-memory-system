@@ -1,4 +1,4 @@
-import type { RetrievedMemory, TaskType } from '../types.js';
+import type { RetrievedMemory, TaskType, AdaptiveWeights } from '../types.js';
 import { scoreTaskRelevance } from './task-relevance.js';
 
 /**
@@ -9,17 +9,26 @@ import { scoreTaskRelevance } from './task-relevance.js';
  *   Stage 2 – Source/type filter            → optional layer restriction
  *   Stage 3 – Composite heuristic rerank    → this module
  *
- * Composite score weights:
- *   0.35 × semantic_similarity   (how close the vector is)
- *   0.25 × recency               (exponential decay over time)
- *   0.20 × importance            (agent-assigned 0–1 score)
- *   0.10 × task_relevance        (tag overlap with task type)
- *   0.10 × usage_popularity      (how often this memory was accessed)
+ * Phase 2 additions:
+ *   • Adaptive weights — shift weight distribution based on retrieval feedback
+ *   • Per-memory feedback boosts — individual score multiplier from past helpfulness
  *
- * The weights deliberately down-weight pure semantic similarity vs. the
- * original 0.4 split, because context (task + importance + recency) often
- * matters more than raw vector distance for agent decision-making.
+ * Default composite score weights:
+ *   0.35 × semantic_similarity
+ *   0.25 × recency
+ *   0.20 × importance
+ *   0.10 × task_relevance
+ *   0.10 × usage_popularity
  */
+
+/** Default weights — used when no adaptive weights are provided */
+const DEFAULT_WEIGHTS: AdaptiveWeights = {
+    semanticSimilarity: 0.35,
+    recency: 0.25,
+    importance: 0.20,
+    taskRelevance: 0.10,
+    usagePopularity: 0.10,
+};
 
 export interface RerankOptions {
     /** If provided, rerank scores are task-type-aware */
@@ -28,6 +37,10 @@ export interface RerankOptions {
     sourceFilter?: Array<RetrievedMemory['source']>;
     /** Max results to return after reranking */
     limit?: number;
+    /** Adaptive weights from feedback tracker (overrides defaults) */
+    adaptiveWeights?: AdaptiveWeights;
+    /** Per-memory boost multipliers from feedback tracker */
+    feedbackBoosts?: Map<string, number>;
 }
 
 /**
@@ -45,6 +58,9 @@ export function rerank(
         ? memories.filter((m) => options.sourceFilter!.includes(m.source))
         : memories;
 
+    // Use adaptive weights if provided, otherwise defaults
+    const w = options.adaptiveWeights ?? DEFAULT_WEIGHTS;
+
     // Stage 3 — composite score recomputation
     for (const item of candidates) {
         const taskRelevance = options.taskType
@@ -56,11 +72,17 @@ export function rerank(
 
         item.score.taskRelevance = taskRelevance;
         item.score.totalScore =
-            0.35 * item.score.semanticSimilarity +
-            0.25 * item.score.recency +
-            0.20 * item.score.importance +
-            0.10 * taskRelevance +
-            0.10 * usagePopularity;
+            w.semanticSimilarity * item.score.semanticSimilarity +
+            w.recency * item.score.recency +
+            w.importance * item.score.importance +
+            w.taskRelevance * taskRelevance +
+            w.usagePopularity * usagePopularity;
+
+        // Apply per-memory feedback boost (Phase 2)
+        if (options.feedbackBoosts) {
+            const boost = options.feedbackBoosts.get(item.score.memoryId) ?? 1.0;
+            item.score.totalScore *= boost;
+        }
     }
 
     candidates.sort((a, b) => b.score.totalScore - a.score.totalScore);

@@ -145,3 +145,78 @@ export interface WorkingMemoryState {
     messages: ConversationMessage[];
     activeContext: Record<string, unknown>;
 }
+
+// ---- Phase 2: Adaptive Learning & Context Optimization ----
+
+/** Retrieval feedback submitted after the agent uses (or ignores) a memory */
+export interface RetrievalFeedback {
+    memory_id: string;
+    query: string;
+    used: boolean;
+    helpful: boolean;
+    timestamp: string;       // ISO 8601
+}
+
+/** Reusable pattern / strategy extracted from reflections */
+export interface StrategyMemory {
+    id: string;
+    pattern: string;         // human-readable description ("comparison content performs better")
+    evidence: string;        // supporting observations
+    effectiveness: number;   // 0.0 – 1.0, updated over time
+    domain: string;          // e.g. "content_format", "response_style", "retrieval"
+    usage_count: number;
+    last_validated: string;  // ISO 8601
+    created_at: string;      // ISO 8601
+    metadata: Record<string, unknown>;
+}
+
+/** Actionable directive derived from reflections */
+export interface BehavioralDirective {
+    id: string;
+    type: 'retrieval_bias' | 'prompt_style' | 'content_preference';
+    directive: string;       // "keep responses concise", "prefer code examples"
+    weight: number;          // 0.0 – 1.0, how strongly to apply
+    source_reflection_id: string;
+    active: boolean;
+    created_at: string;
+}
+
+/** Compression tier for hierarchical context compression */
+export type CompressionTier = 'raw' | 'summary' | 'insight';
+
+/** A memory that has been through the compression pipeline */
+export interface CompressedMemory {
+    memory: RetrievedMemory;
+    tier: CompressionTier;
+    compressedContent: string;
+    originalTokens: number;
+    compressedTokens: number;
+}
+
+/** Options for the context builder */
+export interface ContextBuilderOptions {
+    query: string;
+    max_tokens: number;
+    priority: Array<'recent' | 'important' | 'relevant'>;
+    taskType?: TaskType;
+    include_strategies?: boolean;
+    include_directives?: boolean;
+}
+
+/** Result of context building — everything the prompt needs */
+export interface BuiltContext {
+    memories: CompressedMemory[];
+    strategies: StrategyMemory[];
+    directives: BehavioralDirective[];
+    totalTokens: number;
+    compressionApplied: boolean;
+}
+
+/** Adaptive reranking weights (can shift over time based on feedback) */
+export interface AdaptiveWeights {
+    semanticSimilarity: number;
+    recency: number;
+    importance: number;
+    taskRelevance: number;
+    usagePopularity: number;
+}

@@ -5,6 +5,8 @@ import { EpisodicMemoryService } from './episodic-memory.js';
 import { SemanticMemoryService } from './semantic-memory.js';
 import { KnowledgeGraphService } from './knowledge-graph.js';
 import { ReflectionMemoryService } from './reflection-memory.js';
+import { StrategyMemoryService } from './strategy-memory.js';
+import { FeedbackTracker } from './feedback-tracker.js';
 import { MemoryExtraction } from './memory-extraction.js';
 import { MemoryConsolidation } from './memory-consolidation.js';
 import { rerank } from './utils/reranker.js';
@@ -31,6 +33,11 @@ import type {
  *       1. Vector search (Qdrant)
  *       2. Optional source/tag filter
  *       3. Composite rerank (semantic · recency · importance · taskRelevance · popularity)
+ *
+ * Phase 2 additions:
+ *   • FeedbackTracker  — adaptive scoring via retrieval feedback
+ *   • StrategyMemory   — reusable pattern storage
+ *   • Adaptive rerank  — weights shift based on accumulated feedback signal
  */
 export class MemoryManager {
     public working: WorkingMemory;
@@ -38,6 +45,8 @@ export class MemoryManager {
     public semantic: SemanticMemoryService;
     public knowledgeGraph: KnowledgeGraphService;
     public reflection: ReflectionMemoryService;
+    public strategies: StrategyMemoryService;
+    public feedback: FeedbackTracker;
     public extraction: MemoryExtraction;
     public consolidation: MemoryConsolidation;
 
@@ -49,6 +58,8 @@ export class MemoryManager {
         this.semantic = new SemanticMemoryService();
         this.knowledgeGraph = new KnowledgeGraphService();
         this.reflection = new ReflectionMemoryService();
+        this.strategies = new StrategyMemoryService();
+        this.feedback = new FeedbackTracker();
         this.extraction = new MemoryExtraction();
         this.consolidation = new MemoryConsolidation(this.episodic, this.semantic);
     }
@@ -236,6 +247,7 @@ export class MemoryManager {
      * Stage 1 — vector search per layer (semantic / reflection / knowledge graph)
      * Stage 2 — optional source filter  (via query.filters.source)
      * Stage 3 — composite rerank        (semantic · recency · importance · taskRelevance · popularity)
+     * Stage 4 — feedback boost          (Phase 2: per-memory helpfulness multiplier)
      */
     async retrieve(query: RetrievalQuery): Promise<RetrievedMemory[]> {
         const limit = query.limit ?? config.agent.memoryRetrievalLimit;
@@ -326,12 +338,47 @@ export class MemoryManager {
             console.error('Knowledge graph retrieval failed:', error);
         }
 
-        // Stages 2 & 3 — filter + composite rerank
+        // Phase 2 — fetch adaptive weights and per-memory boosts
+        let feedbackBoosts: Map<string, number> | undefined;
+        let adaptiveWeights;
+
+        try {
+            const memoryIds = candidates.map((c) => c.score.memoryId);
+            [feedbackBoosts, adaptiveWeights] = await Promise.all([
+                this.feedback.getBoosts(memoryIds),
+                this.feedback.getAdaptiveWeights(),
+            ]);
+        } catch (error) {
+            console.error('Feedback retrieval failed (using defaults):', error);
+        }
+
+        // Stages 2, 3, 4 — filter + composite rerank + feedback boost
         return rerank(candidates, {
             taskType,
             sourceFilter: query.filters?.source,
             limit,
+            adaptiveWeights,
+            feedbackBoosts,
         });
+    }
+
+    // ====================================================================
+    // FEEDBACK (Phase 2)
+    // ====================================================================
+
+    /**
+     * Record retrieval feedback for a set of memories.
+     * Call after each interaction with the results of which memories were used.
+     */
+    async recordFeedback(
+        query: string,
+        results: Array<{ memory_id: string; used: boolean; helpful: boolean }>,
+    ): Promise<void> {
+        try {
+            await this.feedback.recordBatch(query, results);
+        } catch (error) {
+            console.error('Feedback recording failed:', error);
+        }
     }
 
     // ====================================================================
@@ -339,12 +386,13 @@ export class MemoryManager {
     // ====================================================================
 
     async getStats(): Promise<Record<string, number>> {
-        const [episodicCount, semanticCount, reflectionCount, graphNodeCount] =
+        const [episodicCount, semanticCount, reflectionCount, graphNodeCount, strategyCount] =
             await Promise.all([
                 this.episodic.count(),
                 this.semantic.count(),
                 this.reflection.count(),
                 this.knowledgeGraph.nodeCount(),
+                this.strategies.count(),
             ]);
 
         return {
@@ -352,6 +400,7 @@ export class MemoryManager {
             semantic: semanticCount,
             reflections: reflectionCount,
             graphNodes: graphNodeCount,
+            strategies: strategyCount,
             interactions: this.interactionCount,
         };
     }

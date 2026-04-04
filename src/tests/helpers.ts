@@ -94,3 +94,44 @@ export function assertDescendingBy<T>(arr: T[], key: keyof T): void {
         }
     }
 }
+
+// ── Phase 2 cleanup helpers ─────────────────────────────────────────────────
+
+/** Delete retrieval_feedback rows by memory IDs. */
+export async function cleanupFeedback(memoryIds: string[]): Promise<void> {
+    if (memoryIds.length === 0) return;
+    try {
+        await db.pg.query(
+            `DELETE FROM retrieval_feedback WHERE memory_id = ANY($1)`,
+            [memoryIds],
+        );
+    } catch {
+        // best-effort
+    }
+}
+
+/** Delete strategy_memories rows by IDs. */
+export async function cleanupStrategies(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    try {
+        await db.pg.query(
+            `DELETE FROM strategy_memories WHERE id = ANY($1::uuid[])`,
+            [ids],
+        );
+    } catch {
+        // best-effort
+    }
+}
+
+/** Delete behavioral_directives rows by IDs. */
+export async function cleanupDirectives(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    try {
+        await db.pg.query(
+            `DELETE FROM behavioral_directives WHERE id = ANY($1::uuid[])`,
+            [ids],
+        );
+    } catch {
+        // best-effort
+    }
+}
