@@ -1,5 +1,6 @@
 import { llm } from '../llm/llm-client.js';
 import { config } from '../config/index.js';
+import { v4 as uuid } from 'uuid';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { ReflectionEngine } from '../reflection/reflection-engine.js';
 import { ContextBuilder } from './context-builder.js';
@@ -77,6 +78,20 @@ export class AgentController {
 
             await this.memory.processInteraction(userMessage, response);
             await this.maybeReflect();
+
+            // Phase 3: Record evaluation
+            try {
+                const memoryIds = context.memories.map((m) => m.memory.memory.id);
+                await this.memory.evaluations.recordEvaluation(
+                    uuid(),
+                    userMessage,
+                    memoryIds,
+                    context.memories.length > 0,
+                    context.memories.length > 0 ? 1.0 : 0.0,
+                );
+            } catch {
+                // evaluation recording is best-effort
+            }
 
             return response;
         } catch (error) {

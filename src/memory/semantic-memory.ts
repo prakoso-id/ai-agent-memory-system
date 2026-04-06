@@ -59,6 +59,9 @@ export class SemanticMemoryService {
         const id = uuid();
         const timestamp = new Date().toISOString();
 
+        // Phase 3: initial confidence based on source reliability
+        const initialConfidence = (memory as any)._initialConfidence ?? 0.5;
+
         await db.qdrant.upsert(this.collection, {
             wait: true,
             points: [
@@ -75,6 +78,11 @@ export class SemanticMemoryService {
                         tags: memory.tags ?? [],
                         timestamp,
                         metadata: memory.metadata,
+                        // Phase 3 fields
+                        confidence: initialConfidence,
+                        decay_factor: 1.0,
+                        conflict_group: null,
+                        archived: false,
                     },
                 },
             ],
@@ -115,11 +123,17 @@ export class SemanticMemoryService {
             ? { must: [{ key: 'category', match: { value: options.category } }] }
             : undefined;
 
+        // Phase 3: exclude archived memories from search
+        const archiveFilter = { key: 'archived', match: { value: false } };
+        const combinedFilter = filter
+            ? { must: [...(filter.must ?? []), archiveFilter] }
+            : { must: [archiveFilter] };
+
         const results = await db.qdrant.search(this.collection, {
             vector: queryEmbedding,
             limit,
             score_threshold: scoreThreshold,
-            filter,
+            filter: combinedFilter,
             with_payload: true,
         });
 
@@ -140,19 +154,26 @@ export class SemanticMemoryService {
             this.touchLastAccessed(r.id as string, now).catch(() => {});
         }
 
-        return results.map((r) => ({
-            id: r.id as string,
-            content: r.payload!.content as string,
-            category: r.payload!.category as string,
-            source: r.payload!.source as string,
-            importance: r.payload!.importance as number,
-            usage_count: (r.payload!.usage_count as number) ?? 0,
-            last_accessed: (r.payload!.last_accessed as string) ?? now,
-            tags: (r.payload!.tags as string[]) ?? [],
-            timestamp: r.payload!.timestamp as string,
-            metadata: (r.payload!.metadata as Record<string, unknown>) ?? {},
-            score: r.score,
-        }));
+        return results.map((r) => {
+            // Phase 3: multiply score by confidence × decay_factor
+            const confidence = (r.payload!.confidence as number) ?? 1.0;
+            const decayFactor = (r.payload!.decay_factor as number) ?? 1.0;
+            const adjustedScore = r.score * confidence * decayFactor;
+
+            return {
+                id: r.id as string,
+                content: r.payload!.content as string,
+                category: r.payload!.category as string,
+                source: r.payload!.source as string,
+                importance: r.payload!.importance as number,
+                usage_count: (r.payload!.usage_count as number) ?? 0,
+                last_accessed: (r.payload!.last_accessed as string) ?? now,
+                tags: (r.payload!.tags as string[]) ?? [],
+                timestamp: r.payload!.timestamp as string,
+                metadata: (r.payload!.metadata as Record<string, unknown>) ?? {},
+                score: adjustedScore,
+            };
+        });
     }
 
     /** Retrieve a single semantic memory by its Qdrant point ID. */
@@ -223,6 +244,42 @@ export class SemanticMemoryService {
         const current = (points[0]!.payload!.usage_count as number) ?? 0;
         await db.qdrant.setPayload(this.collection, {
             payload: { usage_count: current + 1, last_accessed: new Date().toISOString() },
+            points: [id],
+        });
+    }
+
+    // ====================================================================
+    // PHASE 3: CONFIDENCE & DECAY PAYLOAD UPDATES
+    // ====================================================================
+
+    /** Update the confidence score for a semantic memory */
+    async updateConfidence(id: string, confidence: number): Promise<void> {
+        await db.qdrant.setPayload(this.collection, {
+            payload: { confidence: Math.max(0, Math.min(1, confidence)) },
+            points: [id],
+        });
+    }
+
+    /** Update the decay factor for a semantic memory */
+    async updateDecayFactor(id: string, decayFactor: number): Promise<void> {
+        await db.qdrant.setPayload(this.collection, {
+            payload: { decay_factor: Math.max(0, Math.min(1, decayFactor)) },
+            points: [id],
+        });
+    }
+
+    /** Archive a memory (soft-delete — excluded from search) */
+    async archive(id: string): Promise<void> {
+        await db.qdrant.setPayload(this.collection, {
+            payload: { archived: true },
+            points: [id],
+        });
+    }
+
+    /** Set the conflict group tag for a memory */
+    async setConflictGroup(id: string, groupId: string): Promise<void> {
+        await db.qdrant.setPayload(this.collection, {
+            payload: { conflict_group: groupId },
             points: [id],
         });
     }

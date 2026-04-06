@@ -7,6 +7,11 @@ import { KnowledgeGraphService } from './knowledge-graph.js';
 import { ReflectionMemoryService } from './reflection-memory.js';
 import { StrategyMemoryService } from './strategy-memory.js';
 import { FeedbackTracker } from './feedback-tracker.js';
+import { ConflictDetector } from './conflict-detector.js';
+import { ConfidenceScorer } from './confidence-scorer.js';
+import { HypothesisManager } from './hypothesis-manager.js';
+import { EvaluationTracker } from './evaluation-tracker.js';
+import { MemoryPromoter } from './memory-promoter.js';
 import { MemoryExtraction } from './memory-extraction.js';
 import { MemoryConsolidation } from './memory-consolidation.js';
 import { rerank } from './utils/reranker.js';
@@ -49,6 +54,12 @@ export class MemoryManager {
     public feedback: FeedbackTracker;
     public extraction: MemoryExtraction;
     public consolidation: MemoryConsolidation;
+    // Phase 3
+    public conflicts: ConflictDetector;
+    public confidence: ConfidenceScorer;
+    public hypotheses: HypothesisManager;
+    public evaluations: EvaluationTracker;
+    public promoter: MemoryPromoter;
 
     private interactionCount = 0;
 
@@ -62,6 +73,12 @@ export class MemoryManager {
         this.feedback = new FeedbackTracker();
         this.extraction = new MemoryExtraction();
         this.consolidation = new MemoryConsolidation(this.episodic, this.semantic);
+        // Phase 3
+        this.conflicts = new ConflictDetector();
+        this.confidence = new ConfidenceScorer(this.conflicts);
+        this.hypotheses = new HypothesisManager();
+        this.evaluations = new EvaluationTracker();
+        this.promoter = new MemoryPromoter(this.episodic, this.semantic, this.knowledgeGraph);
     }
 
     // ====================================================================
@@ -184,6 +201,38 @@ export class MemoryManager {
             console.error('    ❌ [4/6] Semantic memory storage failed:', err);
         }
 
+        // 4b. Phase 3: Conflict detection on newly stored facts
+        try {
+            for (const fact of extracted.facts) {
+                if (fact.importance < 0.15) continue; // skip low-importance
+                const similar = await this.semantic.search(fact.content, {
+                    limit: 5,
+                    minScore: config.evolution.conflictSimilarityThreshold,
+                });
+                if (similar.length > 1) {
+                    const newMem = similar.find((s) => s.content === fact.content) ?? similar[0]!;
+                    const others = similar.filter((s) => s.id !== newMem.id);
+                    const detected = await this.conflicts.detectConflicts(newMem, others);
+
+                    // Create hypotheses for contradictory conflicts
+                    for (const conflict of detected) {
+                        if (conflict.conflict_type === 'contradictory') {
+                            const memA = others.find((s) => s.id === conflict.memory_id_a);
+                            if (memA) {
+                                await this.hypotheses.createFromConflict(
+                                    conflict,
+                                    memA.content,
+                                    newMem.content,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('    ❌ [4b] Conflict detection failed:', err);
+        }
+
         // 5. Store entities and relationships in knowledge graph (Neo4j)
         try {
             for (const entity of extracted.entities) {
@@ -225,12 +274,19 @@ export class MemoryManager {
             console.error('    ❌ [6/6] Importance scoring failed:', err);
         }
 
-        // 7. Consolidation (every 10 interactions)
+        // 7. Consolidation + Promotion (every 10 interactions)
         if (this.interactionCount % 10 === 0) {
             try {
                 await this.consolidation.consolidate();
             } catch (err) {
                 console.error('    ❌ Consolidation failed:', err);
+            }
+
+            // Phase 3: Run promotion cycle
+            try {
+                await this.promoter.runPromotionCycle();
+            } catch (err) {
+                console.error('    ❌ Promotion cycle failed:', err);
             }
         }
 
@@ -386,13 +442,18 @@ export class MemoryManager {
     // ====================================================================
 
     async getStats(): Promise<Record<string, number>> {
-        const [episodicCount, semanticCount, reflectionCount, graphNodeCount, strategyCount] =
+        const [episodicCount, semanticCount, reflectionCount, graphNodeCount, strategyCount,
+               conflictCount, evaluationCount, promotionCount, hypothesisCount] =
             await Promise.all([
                 this.episodic.count(),
                 this.semantic.count(),
                 this.reflection.count(),
                 this.knowledgeGraph.nodeCount(),
                 this.strategies.count(),
+                this.conflicts.count(),
+                this.evaluations.count(),
+                this.promoter.count(),
+                this.hypotheses.count(),
             ]);
 
         return {
@@ -401,6 +462,10 @@ export class MemoryManager {
             reflections: reflectionCount,
             graphNodes: graphNodeCount,
             strategies: strategyCount,
+            conflicts: conflictCount,
+            evaluations: evaluationCount,
+            promotions: promotionCount,
+            hypotheses: hypothesisCount,
             interactions: this.interactionCount,
         };
     }

@@ -41,6 +41,8 @@ export interface RerankOptions {
     adaptiveWeights?: AdaptiveWeights;
     /** Per-memory boost multipliers from feedback tracker */
     feedbackBoosts?: Map<string, number>;
+    /** Per-memory confidence multipliers from confidence scorer (Phase 3) */
+    confidenceBoosts?: Map<string, number>;
 }
 
 /**
@@ -82,6 +84,13 @@ export function rerank(
         if (options.feedbackBoosts) {
             const boost = options.feedbackBoosts.get(item.score.memoryId) ?? 1.0;
             item.score.totalScore *= boost;
+        }
+
+        // Apply per-memory confidence boost (Phase 3)
+        if (options.confidenceBoosts) {
+            const confidence = options.confidenceBoosts.get(item.score.memoryId) ?? 0.5;
+            // Confidence scales from 0.5× (low confidence) to 1.25× (high confidence)
+            item.score.totalScore *= (0.5 + confidence * 0.75);
         }
     }
 

@@ -220,3 +220,80 @@ export interface AdaptiveWeights {
     taskRelevance: number;
     usagePopularity: number;
 }
+
+// ---- Phase 3: Memory Evolution & Evaluation ----
+
+/** Conflict status for a memory */
+export type ConflictStatus = 'none' | 'detected' | 'hypothesis' | 'resolved' | 'superseded';
+
+/** A detected conflict between two memories */
+export interface MemoryConflict {
+    id: string;
+    memory_id_a: string;
+    memory_id_b: string;
+    conflict_type: 'contradictory' | 'outdated' | 'ambiguous';
+    description: string;
+    status: ConflictStatus;
+    resolution?: string;
+    detected_at: string;
+    resolved_at?: string;
+}
+
+/** Confidence score components for a single memory */
+export interface ConfidenceScore {
+    overall: number;            // 0.0 – 1.0 composite
+    usage_signal: number;       // from retrieval frequency
+    consistency_signal: number; // inverse of conflict count
+    source_reliability: number; // from source trust tier
+    recency_signal: number;     // time decay on confidence
+}
+
+/** A hypothesis holding multiple perspectives on a conflicting topic */
+export interface Hypothesis {
+    id: string;
+    topic: string;
+    perspectives: HypothesisPerspective[];
+    status: 'open' | 'leaning' | 'resolved';
+    resolution?: string;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface HypothesisPerspective {
+    memory_id: string;
+    stance: string;
+    confidence: number;
+    evidence_count: number;
+}
+
+/** Evaluation record for a single retrieval query */
+export interface EvaluationRecord {
+    id: string;
+    query_id: string;
+    query_text: string;
+    retrieved_memory_ids: string[];
+    success: boolean;
+    hit_rate: number;            // % of retrieved memories marked useful
+    response_quality?: number;   // optional 0-1 quality score
+    created_at: string;
+}
+
+/** Aggregate evaluation metrics over a time period */
+export interface EvaluationMetrics {
+    total_queries: number;
+    avg_hit_rate: number;
+    avg_usefulness: number;
+    retrieval_success_rate: number;
+    period_start: string;
+    period_end: string;
+}
+
+/** Audit record for a memory promotion event */
+export interface PromotionEvent {
+    id: string;
+    memory_id: string;
+    from_layer: 'episodic' | 'semantic';
+    to_layer: 'semantic' | 'knowledge_graph';
+    reason: string;
+    promoted_at: string;
+}

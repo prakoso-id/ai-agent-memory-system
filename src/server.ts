@@ -56,7 +56,7 @@ async function startServer(): Promise<void> {
 
             try {
                 // Health check (no auth required)
-                if (method === 'GET' && path === '/api/health') {
+                if (method === 'GET' && (path === '/api/health' || path === '/health')) {
                     response = Response.json(
                         {
                             status: 'ok',

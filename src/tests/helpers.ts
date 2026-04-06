@@ -135,3 +135,45 @@ export async function cleanupDirectives(ids: string[]): Promise<void> {
         // best-effort
     }
 }
+
+// ── Phase 3 cleanup helpers ─────────────────────────────────────────────────
+
+/** Delete memory_conflicts rows by IDs. */
+export async function cleanupConflicts(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    try {
+        await db.pg.query(
+            `DELETE FROM memory_conflicts WHERE id = ANY($1::uuid[])`,
+            [ids],
+        );
+    } catch {
+        // best-effort
+    }
+}
+
+/** Delete evaluation_records rows by IDs. */
+export async function cleanupEvaluations(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    try {
+        await db.pg.query(
+            `DELETE FROM evaluation_records WHERE id = ANY($1::uuid[])`,
+            [ids],
+        );
+    } catch {
+        // best-effort
+    }
+}
+
+/** Delete promotion_events rows by memory IDs. */
+export async function cleanupPromotions(memoryIds: string[]): Promise<void> {
+    if (memoryIds.length === 0) return;
+    try {
+        await db.pg.query(
+            `DELETE FROM promotion_events WHERE memory_id = ANY($1)`,
+            [memoryIds],
+        );
+    } catch {
+        // best-effort
+    }
+}
+
