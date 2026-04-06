@@ -18,8 +18,12 @@
     "test:tc006": "vitest run src/tests/tc-006.adaptive-learning.test.ts",
     "test:tc007": "vitest run src/tests/tc-007.reflection-impact.test.ts",
     "test:tc008": "vitest run src/tests/tc-008.context-compression.test.ts",
+    "test:tc009": "vitest run src/tests/tc-009.conflict-confidence.test.ts",
+    "test:tc010": "vitest run src/tests/tc-010.evaluation-decay.test.ts",
+    "test:tc011": "vitest run src/tests/tc-011.promotion.test.ts",
     "example:phase1": "bun run src/examples/phase1-usage.ts",
-    "example:phase2": "bun run src/examples/phase2-usage.ts"
+    "example:phase2": "bun run src/examples/phase2-usage.ts",
+    "example:phase3": "bun run src/examples/phase3-usage.ts"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "^1.12.0",

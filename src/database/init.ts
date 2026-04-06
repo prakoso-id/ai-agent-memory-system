@@ -177,6 +177,61 @@ export async function initializeDatabase(): Promise<void> {
   `);
     console.log('  ✅ behavioral_directives table ready');
 
+    // ---- Phase 3: Memory Conflicts Table ----
+    await db.pg.query(`
+    CREATE TABLE IF NOT EXISTS memory_conflicts (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      memory_id_a     VARCHAR(200) NOT NULL,
+      memory_id_b     VARCHAR(200) NOT NULL,
+      conflict_type   VARCHAR(50) NOT NULL DEFAULT 'contradictory',
+      description     TEXT NOT NULL DEFAULT '',
+      status          VARCHAR(50) NOT NULL DEFAULT 'detected',
+      resolution      TEXT,
+      detected_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      resolved_at     TIMESTAMP WITH TIME ZONE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conflict_memory_a  ON memory_conflicts(memory_id_a);
+    CREATE INDEX IF NOT EXISTS idx_conflict_memory_b  ON memory_conflicts(memory_id_b);
+    CREATE INDEX IF NOT EXISTS idx_conflict_status    ON memory_conflicts(status);
+  `);
+    console.log('  ✅ memory_conflicts table ready');
+
+    // ---- Phase 3: Evaluation Records Table ----
+    await db.pg.query(`
+    CREATE TABLE IF NOT EXISTS evaluation_records (
+      id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      query_id              VARCHAR(200) NOT NULL,
+      query_text            TEXT NOT NULL,
+      retrieved_memory_ids  TEXT[] DEFAULT '{}',
+      success               BOOLEAN NOT NULL DEFAULT false,
+      hit_rate              REAL NOT NULL DEFAULT 0,
+      response_quality      REAL,
+      created_at            TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_eval_query    ON evaluation_records(query_id);
+    CREATE INDEX IF NOT EXISTS idx_eval_created  ON evaluation_records(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_eval_success  ON evaluation_records(success);
+  `);
+    console.log('  ✅ evaluation_records table ready');
+
+    // ---- Phase 3: Promotion Events Table ----
+    await db.pg.query(`
+    CREATE TABLE IF NOT EXISTS promotion_events (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      memory_id       VARCHAR(200) NOT NULL,
+      from_layer      VARCHAR(50) NOT NULL,
+      to_layer        VARCHAR(50) NOT NULL,
+      reason          TEXT NOT NULL DEFAULT '',
+      promoted_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_promo_memory   ON promotion_events(memory_id);
+    CREATE INDEX IF NOT EXISTS idx_promo_created  ON promotion_events(promoted_at DESC);
+  `);
+    console.log('  ✅ promotion_events table ready');
+
     console.log('\n📦 All schemas initialized.\n');
 }
 

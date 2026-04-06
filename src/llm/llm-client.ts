@@ -7,10 +7,15 @@ import { config } from '../config/index.js';
 class LLMClient {
     private client: OpenAI;
 
+    // 20-second timeout: LLM requests that hang will throw instead of blocking forever.
+    // Must be shorter than any test timeout (TC-011 uses 30s) so the catch block runs.
+    private static readonly LLM_TIMEOUT_MS = 20_000;
+
     constructor() {
         this.client = new OpenAI({
             baseURL: config.llm.baseUrl,
             apiKey: config.llm.apiKey,
+            timeout: LLMClient.LLM_TIMEOUT_MS,
         });
     }
 
@@ -19,13 +24,28 @@ class LLMClient {
         messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
         options?: { temperature?: number; maxTokens?: number },
     ): Promise<string> {
-        const response = await this.client.chat.completions.create({
-            model: config.llm.model,
-            messages,
-            temperature: options?.temperature ?? 0.7,
-            max_tokens: options?.maxTokens ?? 2048,
-        });
-        return response.choices[0]?.message?.content ?? '';
+        // Use AbortController + native setTimeout for a guaranteed per-request timeout.
+        // This is more reliable than the SDK constructor-level timeout, which doesn't
+        // abort hanging TCP connections in all runtimes (e.g. Bun).
+        const controller = new AbortController();
+        const timer = setTimeout(
+            () => controller.abort(new Error(`LLM chat timed out after ${LLMClient.LLM_TIMEOUT_MS}ms`)),
+            LLMClient.LLM_TIMEOUT_MS,
+        );
+        try {
+            const response = await this.client.chat.completions.create(
+                {
+                    model: config.llm.model,
+                    messages,
+                    temperature: options?.temperature ?? 0.7,
+                    max_tokens: options?.maxTokens ?? 2048,
+                },
+                { signal: controller.signal },
+            );
+            return response.choices[0]?.message?.content ?? '';
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
     /** Stream a chat completion response token-by-token */
@@ -73,6 +93,7 @@ class LLMClient {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.llm.apiKey}` },
             body: JSON.stringify({ model: config.llm.embeddingModel, input: text }),
+            signal: AbortSignal.timeout(LLMClient.LLM_TIMEOUT_MS),
         });
 
         if (!response.ok) {
@@ -89,6 +110,7 @@ class LLMClient {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.llm.apiKey}` },
             body: JSON.stringify({ model: config.llm.embeddingModel, input: texts }),
+            signal: AbortSignal.timeout(LLMClient.LLM_TIMEOUT_MS),
         });
 
         if (!response.ok) {

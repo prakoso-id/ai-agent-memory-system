@@ -39,6 +39,21 @@ A **multi-layer cognitive memory service** for AI agents. Provides persistent me
 │  ║  │ Context Compressor (raw→sum→insight)│  ║ │
 │  ║  └─────────────────────────────────────┘  ║ │
 │  ╚═══════════════════════════════════════════╝ │
+│                                                │
+│  ╔══════════════ Phase 3 ════════════════════╗ │
+│  ║  ┌─────────────┐  ┌───────────────────┐   ║ │
+│  ║  │ Conflict    │  │ Confidence        │   ║ │
+│  ║  │ Detector    │  │ Scorer            │   ║ │
+│  ║  └─────────────┘  └───────────────────┘   ║ │
+│  ║  ┌─────────────┐  ┌───────────────────┐   ║ │
+│  ║  │ Hypothesis  │  │ Evaluation        │   ║ │
+│  ║  │ Manager     │  │ Tracker           │   ║ │
+│  ║  └─────────────┘  └───────────────────┘   ║ │
+│  ║  ┌─────────────────────────────────────┐  ║ │
+│  ║  │ Memory Promoter (episodic→semantic) │  ║ │
+│  ║  │ + Semantic Decay & Archival         │  ║ │
+│  ║  └─────────────────────────────────────┘  ║ │
+│  ╚═══════════════════════════════════════════╝ │
 └────────────────────────────────────────────────┘
 ```
 
@@ -155,6 +170,84 @@ const ctx = await contextBuilder.buildContext({
 
 ---
 
+### Phase 3 — Memory Evolution & Evaluation
+
+Built the self-evolving memory layer that makes the system improve autonomously:
+
+| Module | Description | Files |
+|--------|-------------|-------|
+| **Conflict Detector** | Detects contradictory/outdated/ambiguous memories via semantic similarity + LLM classification. Flags conflicts without deleting | `conflict-detector.ts` |
+| **Confidence Scorer** | 4-signal confidence system: usage frequency, conflict consistency, source reliability tiers, recency decay. Weights: `0.30 / 0.25 / 0.25 / 0.20` | `confidence-scorer.ts` |
+| **Hypothesis Manager** | Groups conflicting memories as competing perspectives. Auto-transitions: `open → leaning (>0.7) → resolved (>0.8 + 3 evidence)` | `hypothesis-manager.ts` |
+| **Evaluation Tracker** | Records per-query retrieval quality. Computes hit rate, success rate, per-memory usefulness, and trend detection (current vs previous period) | `evaluation-tracker.ts` |
+| **Memory Promoter** | Promotes frequently-used memories: episodic→semantic (usage≥5, importance≥0.6) and semantic→knowledge graph (usage≥10, confidence≥0.7) via LLM extraction | `memory-promoter.ts` |
+
+**New database tables:**
+
+| Table | Purpose | Key Columns |
+|-------|---------|-------------|
+| `memory_conflicts` | Conflict tracking between memories | `memory_id_a`, `memory_id_b`, `conflict_type`, `status` |
+| `evaluation_records` | Retrieval quality metrics | `query_id`, `retrieved_memory_ids`, `success`, `hit_rate` |
+| `promotion_events` | Memory promotion audit trail | `memory_id`, `from_layer`, `to_layer`, `reason` |
+
+**Qdrant payload additions** (backward-compatible):
+
+| Field | Default | Purpose |
+|-------|---------|--------|
+| `confidence` | `0.5` | Composite confidence score — multiplies retrieval score |
+| `decay_factor` | `1.0` | Time-based decay multiplier — reduced during consolidation |
+| `conflict_group` | `null` | Links conflicting memories together |
+| `archived` | `false` | Soft-delete flag — archived memories excluded from search |
+
+**Updated modules:**
+
+| Module | Changes |
+|--------|---------|
+| `semantic-memory.ts` | Stores confidence/decay/archived payload fields. Search excludes archived. Score multiplied by confidence × decay_factor |
+| `memory-consolidation.ts` | Added semantic decay (confidence-gated) and stale memory archival |
+| `reranker.ts` | Accepts `confidenceBoosts` map for confidence-weighted ranking |
+| `memory-manager.ts` | Wires all Phase 3 modules. Adds conflict detection after semantic store, promotion in consolidation cycles |
+| `agent-controller.ts` | Records evaluation data after each chat response |
+
+**Confidence scoring formula:**
+
+```
+confidence = 0.30 × min(1, usage_count/15)
+           + 0.25 × (1 - conflicts/(conflicts+3))
+           + 0.25 × source_tier(api=1.0, reflection=0.8, episode=0.6, unknown=0.3)
+           + 0.20 × exp(-0.005 × age_hours)
+```
+
+**Memory decay formula:**
+
+```
+new_decay = old_decay × exp(-rate × age_days / (1 + confidence))
+```
+
+High-confidence memories decay slower (denominator `1 + confidence`).
+
+**Promotion rules:**
+
+```
+Episodic → Semantic:
+  usage_count ≥ 5  AND  importance ≥ 0.6
+  → LLM extracts core fact → stored as semantic memory
+
+Semantic → Knowledge Graph:
+  usage_count ≥ 10  AND  confidence ≥ 0.7
+  → LLM extracts entity-relationship triples → added to Neo4j
+```
+
+**Test suites (3):**
+
+| Test | Scenario | Tests |
+|------|----------|-------|
+| TC-009 | Conflict detection, confidence scoring, source reliability, hypothesis lifecycle | 15 |
+| TC-010 | Evaluation tracking, metrics computation, semantic decay, stale archival, trend detection | 15 |
+| TC-011 | Episodic→semantic promotion, semantic→KG promotion, audit trail, threshold rejection | 12 |
+
+---
+
 ## Quick Start
 
 ### 1. Prerequisites
@@ -198,7 +291,7 @@ bun run dev
 ### 4. Test
 
 ```bash
-# Run all tests (8 suites, 80 tests)
+# Run all tests (11 suites, 122 tests)
 bun run test
 
 # Run individual Phase 1 tests
@@ -213,9 +306,15 @@ bun run test:tc006    # Adaptive learning
 bun run test:tc007    # Reflection impact
 bun run test:tc008    # Context compression
 
+# Run individual Phase 3 tests
+bun run test:tc009    # Conflict detection & confidence
+bun run test:tc010    # Evaluation tracking & decay
+bun run test:tc011    # Memory promotion
+
 # Run examples
 bun run example:phase1
 bun run example:phase2
+bun run example:phase3
 ```
 
 ---
@@ -616,6 +715,12 @@ All settings are in `.env`:
 | **Context Builder** *(Phase 2)* | | |
 | `CONTEXT_MAX_TOKENS` | `2048` | Token budget for context assembly |
 | `COMPRESSION_THRESHOLD` | `0.7` | Compression trigger threshold |
+| **Memory Evolution** *(Phase 3)* | | |
+| `CONFLICT_SIMILARITY_THRESHOLD` | `0.75` | Cosine similarity threshold for conflict detection |
+| `CONFIDENCE_DECAY_RATE` | `0.005` | Confidence time-decay rate (per hour) |
+| `STALE_ARCHIVE_DAYS` | `30` | Days after which unused memories are archived |
+| `PROMOTION_USAGE_THRESHOLD` | `5` | Min usage count for episodic→semantic promotion |
+| `PROMOTION_CONFIDENCE_THRESHOLD` | `0.7` | Min confidence for semantic→KG promotion |
 
 ---
 
@@ -651,6 +756,11 @@ src/
 │   ├── feedback-tracker.ts       # [Phase 2] Retrieval feedback + adaptive weights
 │   ├── strategy-memory.ts        # [Phase 2] Reusable pattern storage
 │   ├── context-compression.ts    # [Phase 2] Hierarchical compression (raw→summary→insight)
+│   ├── conflict-detector.ts      # [Phase 3] Contradictory/outdated memory detection
+│   ├── confidence-scorer.ts      # [Phase 3] 4-signal confidence scoring
+│   ├── hypothesis-manager.ts     # [Phase 3] Multi-perspective conflict storage
+│   ├── evaluation-tracker.ts     # [Phase 3] Retrieval quality metrics
+│   ├── memory-promoter.ts        # [Phase 3] Episodic→semantic→KG promotion
 │   └── utils/
 │       ├── reranker.ts           # Multi-signal composite scorer (adaptive)
 │       ├── task-relevance.ts     # Task-type inference + tag scoring
@@ -664,7 +774,8 @@ src/
 │   └── context-builder.ts        # [Phase 2] Token-aware context assembly
 ├── examples/
 │   ├── phase1-usage.ts           # Phase 1 feature demo
-│   └── phase2-usage.ts           # Phase 2 feature demo
+│   ├── phase2-usage.ts           # Phase 2 feature demo
+│   └── phase3-usage.ts           # Phase 3 feature demo
 └── tests/
     ├── helpers.ts                # Shared test utilities + cleanup
     ├── tc-001.write-filter.test.ts
@@ -674,7 +785,10 @@ src/
     ├── tc-005.edge-cases.test.ts
     ├── tc-006.adaptive-learning.test.ts    # [Phase 2]
     ├── tc-007.reflection-impact.test.ts    # [Phase 2]
-    └── tc-008.context-compression.test.ts  # [Phase 2]
+    ├── tc-008.context-compression.test.ts  # [Phase 2]
+    ├── tc-009.conflict-confidence.test.ts  # [Phase 3]
+    ├── tc-010.evaluation-decay.test.ts     # [Phase 3]
+    └── tc-011.promotion.test.ts            # [Phase 3]
 ```
 
 ## Technical Summary
@@ -684,9 +798,9 @@ src/
 - **Backend**: REST API (Bun.serve), SSE Streaming
 - **Database**: PostgreSQL, Redis, Qdrant (Vector DB), Neo4j (Graph DB)
 - **DevOps**: Docker, Docker Compose
-- **Testing**: Vitest (8 suites, 80 tests — all against real databases)
+- **Testing**: Vitest (11 suites, 122 tests — all against real databases)
 - **AI/LLM**: OpenAI SDK, LM Studio, OpenRouter, Vector Embeddings (Qdrant), Prompt Engineering
-- **Key Patterns**: Adaptive retrieval scoring, hierarchical context compression, reflection-to-behavior pipeline, semantic deduplication, multi-stage reranking
+- **Key Patterns**: Adaptive retrieval scoring, hierarchical context compression, reflection-to-behavior pipeline, semantic deduplication, multi-stage reranking, conflict detection, confidence scoring, memory promotion lifecycle
 
 ## License
 

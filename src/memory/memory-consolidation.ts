@@ -1,5 +1,6 @@
 import { llm } from '../llm/llm-client.js';
 import { config } from '../config/index.js';
+import { db } from '../database/connections.js';
 import { EpisodicMemoryService } from './episodic-memory.js';
 import { SemanticMemoryService } from './semantic-memory.js';
 import type { ConsolidationResult } from './types.js';
@@ -23,7 +24,24 @@ export class MemoryConsolidation {
             this.mergeRedundant(),
         ]);
 
-        console.log(`  📉 Decayed: ${decayed} | 📝 Summarized: ${summarized} | 🔀 Merged: ${merged}`);
+        // Phase 3: semantic decay + stale archival
+        let semanticDecayed = 0;
+        let archived = 0;
+        try {
+            semanticDecayed = await this.applySemanticDecay(config.agent.memoryDecayFactor, 3);
+            archived = await this.archiveStaleMemories(
+                config.evolution.staleArchiveDays,
+                0.05,
+            );
+        } catch (err) {
+            console.error('  ❌ Phase 3 consolidation step failed:', err);
+        }
+
+        console.log(
+            `  📉 Decayed: ${decayed} | 📝 Summarized: ${summarized} | 🔀 Merged: ${merged}` +
+            `${semanticDecayed > 0 ? ` | 🌀 Semantic-decayed: ${semanticDecayed}` : ''}` +
+            `${archived > 0 ? ` | 📦 Archived: ${archived}` : ''}`,
+        );
         return { decayed, summarized, merged };
     }
 
@@ -175,5 +193,104 @@ export class MemoryConsolidation {
         ], { temperature: 0.3 });
 
         return result;
+    }
+
+    // ====================================================================
+    // PHASE 3: SEMANTIC DECAY & ARCHIVAL
+    // ====================================================================
+
+    /**
+     * Apply decay to semantic memories by reducing their decay_factor.
+     *
+     * High-confidence memories decay slower:
+     *   new_decay = old_decay × exp(-rate × age_days / (1 + confidence))
+     *
+     * Only affects memories older than minAgeDays.
+     */
+    async applySemanticDecay(decayRate: number, minAgeDays: number): Promise<number> {
+        // Get memories older than the threshold
+        const cutoff = new Date(Date.now() - minAgeDays * 24 * 60 * 60 * 1000).toISOString();
+        let decayed = 0;
+
+        try {
+            // Scroll through Qdrant to find old memories
+            const scrollResult = await db.qdrant.scroll(config.qdrant.collection, {
+                filter: {
+                    must: [
+                        { key: 'archived', match: { value: false } },
+                    ],
+                },
+                limit: 100,
+                with_payload: true,
+                with_vector: false,
+            });
+
+            for (const point of scrollResult.points) {
+                const timestamp = point.payload!.timestamp as string;
+                const currentDecay = (point.payload!.decay_factor as number) ?? 1.0;
+                const confidence = (point.payload!.confidence as number) ?? 0.5;
+
+                if (timestamp < cutoff && currentDecay > 0.1) {
+                    const ageDays = (Date.now() - new Date(timestamp).getTime()) / (1000 * 60 * 60 * 24);
+                    // Higher confidence = slower decay
+                    const adjustedRate = decayRate / (1 + confidence);
+                    const newDecay = currentDecay * Math.exp(-adjustedRate * ageDays);
+
+                    await this.semantic.updateDecayFactor(
+                        point.id as string,
+                        Math.max(0.01, newDecay),
+                    );
+                    decayed++;
+                }
+            }
+        } catch (error) {
+            console.error('Semantic decay failed:', error);
+        }
+
+        return decayed;
+    }
+
+    /**
+     * Archive stale, unused memories.
+     *
+     * A memory is stale if:
+     *   - importance < minImportance
+     *   - usage_count = 0
+     *   - age > maxAgeDays
+     */
+    async archiveStaleMemories(maxAgeDays: number, minImportance: number): Promise<number> {
+        const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+        let archived = 0;
+
+        try {
+            const scrollResult = await db.qdrant.scroll(config.qdrant.collection, {
+                filter: {
+                    must: [
+                        { key: 'archived', match: { value: false } },
+                    ],
+                },
+                limit: 100,
+                with_payload: true,
+                with_vector: false,
+            });
+
+            for (const point of scrollResult.points) {
+                const timestamp = point.payload!.timestamp as string;
+                const importance = (point.payload!.importance as number) ?? 0;
+                const usageCount = (point.payload!.usage_count as number) ?? 0;
+
+                if (timestamp < cutoff && importance < minImportance && usageCount === 0) {
+                    await this.semantic.archive(point.id as string);
+                    archived++;
+                    console.log(
+                        `    📦 Archived stale memory: "${(point.payload!.content as string)?.substring(0, 50)}..."`,
+                    );
+                }
+            }
+        } catch (error) {
+            console.error('Stale memory archival failed:', error);
+        }
+
+        return archived;
     }
 }

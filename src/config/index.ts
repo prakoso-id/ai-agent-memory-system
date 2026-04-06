@@ -50,6 +50,15 @@ export const config = {
         compressionThreshold: parseFloat(process.env.COMPRESSION_THRESHOLD || '0.7'),
     },
 
+    // Memory Evolution (Phase 3)
+    evolution: {
+        conflictSimilarityThreshold: parseFloat(process.env.CONFLICT_SIMILARITY_THRESHOLD || '0.75'),
+        confidenceDecayRate: parseFloat(process.env.CONFIDENCE_DECAY_RATE || '0.005'),
+        staleArchiveDays: parseInt(process.env.STALE_ARCHIVE_DAYS || '30'),
+        promotionUsageThreshold: parseInt(process.env.PROMOTION_USAGE_THRESHOLD || '5'),
+        promotionConfidenceThreshold: parseFloat(process.env.PROMOTION_CONFIDENCE_THRESHOLD || '0.7'),
+    },
+
     // Server settings
     server: {
         port: parseInt(process.env.API_PORT || '3001'),
