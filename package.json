@@ -23,7 +23,14 @@
     "test:tc011": "vitest run src/tests/tc-011.promotion.test.ts",
     "example:phase1": "bun run src/examples/phase1-usage.ts",
     "example:phase2": "bun run src/examples/phase2-usage.ts",
-    "example:phase3": "bun run src/examples/phase3-usage.ts"
+    "example:phase3": "bun run src/examples/phase3-usage.ts",
+    "example:phase4": "bun run src/examples/phase4-usage.ts",
+    "test:tc012": "vitest run src/tests/tc-012.semantic-cache.test.ts",
+    "test:tc013": "vitest run src/tests/tc-013.role-memory.test.ts",
+    "test:tc014": "vitest run src/tests/tc-014.observability.test.ts",
+    "test:dashboard": "vitest run src/tests/tc-012.semantic-cache.test.ts src/tests/tc-013.role-memory.test.ts src/tests/tc-014.observability.test.ts",
+    "dashboard:dev": "cd dashboard && bun install && bun run dev",
+    "dashboard:build": "cd dashboard && bun install && bun run build"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "^1.12.0",
