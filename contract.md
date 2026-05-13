@@ -219,7 +219,7 @@ Authorization: Bearer <key>
     {
       "sessionId": "my-agent-session-001",
       "createdAt": "2026-05-13T10:00:00.000Z",
-      "lastInteraction": "2026-05-13T10:05:00.000Z",
+      "lastActivity": "2026-05-13T10:05:00.000Z",
       "interactionCount": 12
     }
   ]
@@ -837,7 +837,7 @@ interface EpisodicMemory extends BaseMemory {
 interface SemanticMemory extends BaseMemory {
   category: string;        // 'user_preference' | 'project_fact' | 'general_knowledge' | ...
   source: string;          // wajib untuk semantic
-  embedding?: number[];    // vector embedding (384-dim)
+  embedding?: number[];    // vector embedding (768-dim)
 }
 ```
 
@@ -879,7 +879,7 @@ interface KnowledgeEdge {
 ### DashboardMetrics
 
 ```typescript
-interface Phase4Metrics {
+interface DashboardMetrics {
   cacheHitRate: number;
   cacheEntries: number;
   avgRetrievalLatencyMs: number;
