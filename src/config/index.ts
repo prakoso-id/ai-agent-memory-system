@@ -7,7 +7,14 @@ export const config = {
         baseUrl: process.env.LLM_BASE_URL || 'http://localhost:1234/v1',
         apiKey: process.env.LLM_API_KEY || 'lm-studio',
         model: process.env.LLM_MODEL || 'deepseek-r1',
-        embeddingModel: process.env.EMBEDDING_MODEL || 'nomic-embed-text',
+    },
+
+    // Embedding can be a separate provider (e.g. LM Studio local) while chat uses a remote LLM.
+    // Falls back to llm.baseUrl / llm.apiKey if not explicitly set.
+    embedding: {
+        model: process.env.EMBEDDING_MODEL || 'nomic-embed-text',
+        baseUrl: process.env.EMBEDDING_BASE_URL || process.env.LLM_BASE_URL || 'http://localhost:1234/v1',
+        apiKey: process.env.EMBEDDING_API_KEY || process.env.LLM_API_KEY || 'lm-studio',
     },
 
     // Redis
