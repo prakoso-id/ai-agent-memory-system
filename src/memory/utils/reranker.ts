@@ -13,6 +13,15 @@ import { scoreTaskRelevance } from './task-relevance.js';
  *   • Adaptive weights — shift weight distribution based on retrieval feedback
  *   • Per-memory feedback boosts — individual score multiplier from past helpfulness
  *
+ * Phase 3 additions:
+ *   • Per-memory confidence boosts — scales score from 0.5× (low) to 1.25× (high)
+ *
+ * Phase 4 additions:
+ *   • Role relevance boosts — per-memory multiplier derived from importance_per_role
+ *     (supplied via feedbackBoosts from RoleMemoryService, or via confidenceBoosts)
+ *   • Both feedbackBoosts and confidenceBoosts are applied multiplicatively after
+ *     the composite score so that role context and confidence always influence ranking
+ *
  * Default composite score weights:
  *   0.35 × semantic_similarity
  *   0.25 × recency
@@ -39,9 +48,18 @@ export interface RerankOptions {
     limit?: number;
     /** Adaptive weights from feedback tracker (overrides defaults) */
     adaptiveWeights?: AdaptiveWeights;
-    /** Per-memory boost multipliers from feedback tracker */
+    /**
+     * Per-memory boost multipliers.
+     * Phase 2: helpfulness feedback boost.
+     * Phase 4: role-relevance boost (importance_per_role[role] / global_importance).
+     * Values are capped to [0.5, 2.0] by callers.
+     */
     feedbackBoosts?: Map<string, number>;
-    /** Per-memory confidence multipliers from confidence scorer (Phase 3) */
+    /**
+     * Per-memory confidence multipliers from confidence scorer (Phase 3).
+     * Scales final score from 0.5× (confidence=0) to 1.25× (confidence=1).
+     * Must now be supplied by MemoryManager.retrieve() alongside feedbackBoosts.
+     */
     confidenceBoosts?: Map<string, number>;
 }
 
@@ -80,13 +98,13 @@ export function rerank(
             w.taskRelevance * taskRelevance +
             w.usagePopularity * usagePopularity;
 
-        // Apply per-memory feedback boost (Phase 2)
+        // Apply per-memory feedback boost (Phase 2 / Phase 4 role boost)
         if (options.feedbackBoosts) {
             const boost = options.feedbackBoosts.get(item.score.memoryId) ?? 1.0;
             item.score.totalScore *= boost;
         }
 
-        // Apply per-memory confidence boost (Phase 3)
+        // Apply per-memory confidence boost (Phase 3 — now wired from MemoryManager)
         if (options.confidenceBoosts) {
             const confidence = options.confidenceBoosts.get(item.score.memoryId) ?? 0.5;
             // Confidence scales from 0.5× (low confidence) to 1.25× (high confidence)

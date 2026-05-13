@@ -62,8 +62,45 @@ export const config = {
     // Server settings
     server: {
         port: parseInt(process.env.API_PORT || '3001'),
-        corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',').map(s => s.trim()),
+        corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:5173').split(',').map(s => s.trim()),
         apiKeys: (process.env.API_KEYS || 'dev-key-change-me').split(',').map(s => s.trim()),
+    },
+
+    // Phase 4: Semantic Cache
+    semanticCache: {
+        /** Cosine-similarity threshold above which a cached response is returned */
+        similarityThreshold: parseFloat(process.env.CACHE_SIMILARITY_THRESHOLD || '0.95'),
+        /** TTL for cache entries in seconds (default 1 hour) */
+        ttlSeconds: parseInt(process.env.CACHE_TTL_SECONDS || '3600'),
+        /** Redis key prefix for cache entries */
+        keyPrefix: process.env.CACHE_KEY_PREFIX || 'sc:',
+        /** Redis key for the cache index set */
+        indexKey: process.env.CACHE_INDEX_KEY || 'sc:index',
+        /** Max entries before LRU eviction kicks in (0 = unlimited) */
+        maxEntries: parseInt(process.env.CACHE_MAX_ENTRIES || '500'),
+        /** Enable / disable the cache globally */
+        enabled: (process.env.CACHE_ENABLED ?? 'true') === 'true',
+    },
+
+    // Phase 4: Role-Based Memory Partitioning
+    roles: {
+        /** Default role assigned to agents that do not specify one */
+        defaultRole: (process.env.DEFAULT_AGENT_ROLE || 'general') as
+            'coder' | 'pm' | 'qa' | 'analyst' | 'general',
+        /** Score weight applied to the role-relevance dimension in reranking */
+        roleRelevanceWeight: parseFloat(process.env.ROLE_RELEVANCE_WEIGHT || '0.15'),
+        /** Minimum role-importance to include a memory in role-scoped results */
+        minRoleImportance: parseFloat(process.env.ROLE_MIN_IMPORTANCE || '0.1'),
+    },
+
+    // Phase 4: Observability / Latency tracking
+    observability: {
+        /** Number of latency samples to retain in Redis (ring buffer) */
+        latencyBufferSize: parseInt(process.env.LATENCY_BUFFER_SIZE || '200'),
+        /** Redis key for latency ring buffer */
+        latencyKey: process.env.LATENCY_BUFFER_KEY || 'obs:latency',
+        /** Redis key for cache counters (hits / misses) */
+        cacheCounterKey: process.env.CACHE_COUNTER_KEY || 'obs:cache',
     },
 } as const;
 

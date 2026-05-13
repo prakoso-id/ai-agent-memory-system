@@ -34,6 +34,12 @@ const TASK_KEYWORDS: Record<TaskType, readonly string[]> = {
         'finding', 'evaluation', 'review', 'comparison', 'benchmark', 'report',
         'statistics', 'correlation', 'performance',
     ],
+    dnd: [
+        'character', 'quest', 'dungeon', 'dragon', 'spell', 'combat', 'armor', 'weapon',
+        'inventory', 'npc', 'location', 'lore', 'monster', 'level', 'experience', 'gold',
+        'game_event', 'world_state', 'hypothesis', 'prediction', 'plot_hook', 'style_guide',
+        'canonized_history', 'campaign', 'tavern', 'potion', 'magic', 'hp', 'adventure',
+    ],
     general: [],   // no affinity — contributes neutral score
 };
 
@@ -48,7 +54,8 @@ export function scoreTaskRelevance(tags: string[], taskType: TaskType): number {
     if (taskType === 'general') return 0.5;
 
     const keywords = TASK_KEYWORDS[taskType];
-    if (tags.length === 0 || keywords.length === 0) return 0.3;
+    // Defensive guard: unknown task types treated as neutral
+    if (!keywords || tags.length === 0 || keywords.length === 0) return 0.3;
 
     const normalizedTags = tags.map((t) => t.toLowerCase());
     const matches = normalizedTags.filter(
