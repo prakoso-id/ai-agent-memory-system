@@ -1,12 +1,13 @@
-import { config } from './config/index.js';
+import { config, validateConfig } from './config/index.js';
 import { db } from './database/connections.js';
 import { initializeDatabase } from './database/init.js';
 import { SessionManager } from './api/session-manager.js';
-import { withAuth, corsHeaders, handlePreflight, logRequest } from './api/middleware.js';
+import { withAuth, withRateLimit, corsHeaders, handlePreflight, logRequest } from './api/middleware.js';
 import { chatRoutes } from './api/routes/chat.js';
 import { memoryRoutes } from './api/routes/memory.js';
 import { sessionRoutes } from './api/routes/sessions.js';
 import { dashboardRoutes } from './api/routes/dashboard.js';
+import { logger } from './logger.js';
 
 /**
  * AI Agent Memory System — REST API Server.
@@ -41,12 +42,14 @@ async function startServer(): Promise<void> {
     console.log('╔══════════════════════════════════════════════════════════╗');
     console.log('║   🧠  Memory System API Server                         ║');
     console.log('╚══════════════════════════════════════════════════════════╝\n');
-
+    // ENH-001: Fail fast if required environment variables are missing
+    validateConfig();
     // Initialize databases
     await initializeDatabase();
 
-    // Create session manager and route handlers
+    // Create session manager and restore persisted sessions from Redis (ENH-005)
     const sessions = new SessionManager(config.agent.workingMemoryTTL * 1000);
+    await sessions.loadFromRedis();
     const chat = chatRoutes(sessions);
     const memory = memoryRoutes(sessions);
     const session = sessionRoutes(sessions);
@@ -69,27 +72,30 @@ async function startServer(): Promise<void> {
             let response: Response;
 
             try {
-                // Health check (no auth required)
+                // Health check — detailed per-service status (ENH-007), no auth required
                 if (method === 'GET' && (path === '/api/health' || path === '/health')) {
+                    const services = await db.checkHealth();
+                    const allOk = Object.values(services).every(s => s === 'ok');
                     response = Response.json(
                         {
-                            status: 'ok',
+                            status: allOk ? 'ok' : 'degraded',
                             timestamp: new Date().toISOString(),
                             version: '1.0.0',
                             sessions: sessions.listSessions().length,
+                            services,
                         },
-                        { headers: corsHeaders(req) },
+                        { status: allOk ? 200 : 503, headers: corsHeaders(req) },
                     );
                 }
                 // All other routes require auth
                 else {
                     const authHandler = withAuth(async () => {
-                        // ---- Chat routes ----
+                        // ---- Chat routes (rate-limited: 20 req/min per API key) ----
                         if (method === 'POST' && path === '/api/chat') {
-                            return chat.stream(req);
+                            return withRateLimit(20)(chat.stream)(req);
                         }
                         if (method === 'POST' && path === '/api/chat/sync') {
-                            return chat.sync(req);
+                            return withRateLimit(20)(chat.sync)(req);
                         }
 
                         // ---- Memory routes ----
@@ -198,7 +204,7 @@ async function startServer(): Promise<void> {
                     response = await authHandler(req);
                 }
             } catch (error) {
-                console.error('Server error:', error);
+                logger.error({ err: error }, 'Server error');
                 response = Response.json(
                     { error: 'Internal server error' },
                     { status: 500, headers: corsHeaders(req) },
@@ -210,13 +216,14 @@ async function startServer(): Promise<void> {
         },
     });
 
-    console.log(`\n🚀 API Server running at http://localhost:${server.port}`);
-    console.log(`   Auth: Bearer token required (configured ${config.server.apiKeys.length} key(s))`);
-    console.log(`   CORS: ${config.server.corsOrigins.join(', ')}\n`);
+    logger.info(
+        { port: server.port, keys: config.server.apiKeys.length, cors: config.server.corsOrigins },
+        `API Server running at http://localhost:${server.port}`,
+    );
 
     // Graceful shutdown
     const shutdown = async () => {
-        console.log('\n👋 Shutting down server...');
+        logger.info('Shutting down server...');
         sessions.destroy();
         server.stop();
         await db.shutdown();

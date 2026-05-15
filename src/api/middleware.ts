@@ -1,4 +1,8 @@
 import { config } from '../config/index.js';
+import { db } from '../database/connections.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('middleware');
 
 type Handler = (req: Request) => Promise<Response> | Response;
 
@@ -27,13 +31,15 @@ export function withAuth(handler: Handler): Handler {
 
 /**
  * CORS headers for all responses.
+ * Returns empty object (no CORS headers) for unrecognized origins — BUG-001 fix.
  */
 export function corsHeaders(req: Request): Record<string, string> {
     const origin = req.headers.get('Origin') ?? '';
-    const allowed = config.server.corsOrigins.includes(origin) ? origin : config.server.corsOrigins[0]!;
-
+    if (!origin || !config.server.corsOrigins.includes(origin)) {
+        return {};
+    }
     return {
-        'Access-Control-Allow-Origin': allowed,
+        'Access-Control-Allow-Origin': origin,
         'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         'Access-Control-Max-Age': '86400',
@@ -48,10 +54,44 @@ export function handlePreflight(req: Request): Response {
 }
 
 /**
- * Log request details.
+ * Rate limiting middleware — Redis sliding window counter (SEC-001 / ENH-008).
+ * Fails open if Redis is unavailable so a DB outage doesn't block all traffic.
+ *
+ * @param maxPerMinute Maximum requests per minute per API key (or IP as fallback).
+ */
+export function withRateLimit(maxPerMinute: number): (handler: Handler) => Handler {
+    return (handler) => async (req) => {
+        const auth = req.headers.get('Authorization') ?? '';
+        const keyId = auth.startsWith('Bearer ') ? auth.slice(7) : (req.headers.get('X-Forwarded-For') ?? 'anon');
+        const windowKey = `ratelimit:${keyId}:${Math.floor(Date.now() / 60_000)}`;
+        try {
+            const count = await db.redis.incr(windowKey);
+            if (count === 1) await db.redis.expire(windowKey, 60);
+            if (count > maxPerMinute) {
+                return Response.json(
+                    { error: 'Rate limit exceeded', retryAfter: 60 },
+                    { status: 429, headers: { 'Retry-After': '60' } },
+                );
+            }
+        } catch {
+            // Redis unavailable — fail open, do not block traffic
+        }
+        return handler(req);
+    };
+}
+
+/**
+ * Extract the raw Bearer token from the Authorization header.
+ * Used by route handlers to bind or validate session ownership (SEC-004).
+ */
+export function extractApiKey(req: Request): string {
+    const auth = req.headers.get('Authorization') ?? '';
+    return auth.startsWith('Bearer ') ? auth.slice(7) : '';
+}
+
+/**
+ * Log request details — ENH-003: structured JSON via pino.
  */
 export function logRequest(method: string, path: string, status: number, durationMs: number): void {
-    const timestamp = new Date().toISOString();
-    const statusIcon = status < 400 ? '✅' : '❌';
-    console.log(`  ${statusIcon} [${timestamp}] ${method} ${path} → ${status} (${durationMs}ms)`);
+    log.info({ method, path, status, durationMs }, `${method} ${path} \u2192 ${status}`);
 }

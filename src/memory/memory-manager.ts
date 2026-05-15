@@ -171,11 +171,11 @@ export class MemoryManager {
                 let memories: RetrievedMemory[] = [];
                 let llmResponse: string = hit.response;
 
-                // Response format: JSON prefix separated from natural-language by sentinel
-                const sentinelIdx = hit.response.indexOf('\n---MEMORIES---\n');
+                // BUG-004 fix: sentinel uses null-byte delimiters that cannot appear in natural language
+                const sentinelIdx = hit.response.indexOf('\x00MEMORIES_JSON\x00');
                 if (sentinelIdx !== -1) {
                     llmResponse  = hit.response.substring(0, sentinelIdx);
-                    const memJson = hit.response.substring(sentinelIdx + 16);
+                    const memJson = hit.response.substring(sentinelIdx + 15);
                     try { memories = JSON.parse(memJson); } catch { /* use empty */ }
                 }
 
@@ -193,7 +193,8 @@ export class MemoryManager {
         if (llmCall) {
             llmResponse = await llmCall();
             // Store combined payload so both memories and LLM response survive together
-            const combined = `${llmResponse}\n---MEMORIES---\n${JSON.stringify(memories)}`;
+            // BUG-004: use null-byte sentinel that cannot appear in natural language
+            const combined = `${llmResponse}\x00MEMORIES_JSON\x00${JSON.stringify(memories)}`;
             await this.cache.set(queryText, combined);
         }
 

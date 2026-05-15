@@ -3,7 +3,9 @@ import pg from 'pg';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j, { type Driver as Neo4jDriver } from 'neo4j-driver';
 import { config } from '../config/index.js';
+import { createLogger } from '../logger.js';
 
+const log = createLogger('db');
 const { Pool } = pg;
 
 /**
@@ -17,6 +19,11 @@ class DatabaseConnections {
     public pg!: pg.Pool;
     public qdrant!: QdrantClient;
     public neo4j!: Neo4jDriver;
+
+    /** ENH-006: per-service availability flags */
+    public availability: Record<'redis' | 'postgres' | 'qdrant' | 'neo4j', boolean> = {
+        redis: false, postgres: false, qdrant: false, neo4j: false,
+    };
 
     private initialized = false;
 
@@ -35,8 +42,18 @@ class DatabaseConnections {
 
         console.log('🔌 Initializing database connections...');
 
+        // BUG-006: support separate REDIS_PASSWORD env var injected into the URL if not already present
+        const redisUrl = (() => {
+            const url = config.redis.url;
+            const sep = process.env.REDIS_PASSWORD;
+            if (sep && !url.includes('@') && url.startsWith('redis://')) {
+                return url.replace('redis://', `redis://:${encodeURIComponent(sep)}@`);
+            }
+            return url;
+        })();
+
         // Redis
-        this.redis = new Redis(config.redis.url, {
+        this.redis = new Redis(redisUrl, {
             maxRetriesPerRequest: 3,
             retryStrategy: (times) => Math.min(times * 200, 2000),
         });
@@ -44,7 +61,7 @@ class DatabaseConnections {
         await this.redis.ping();
         console.log('  ✅ Redis connected');
 
-        // PostgreSQL
+        // PostgreSQL (SEC-005: optional SSL via POSTGRES_SSL=true)
         this.pg = new Pool({
             host: config.postgres.host,
             port: config.postgres.port,
@@ -52,12 +69,16 @@ class DatabaseConnections {
             password: config.postgres.password,
             database: config.postgres.database,
             max: 10,
+            ssl: config.postgres.ssl ? { rejectUnauthorized: false } : false,
         });
         await this.pg.query('SELECT 1');
         console.log('  ✅ PostgreSQL connected');
 
         // Qdrant
-        this.qdrant = new QdrantClient({ url: config.qdrant.url });
+        this.qdrant = new QdrantClient({
+            url: config.qdrant.url,
+            ...(config.qdrant.apiKey ? { apiKey: config.qdrant.apiKey } : {}),
+        });
         await this.qdrant.getCollections(); // health check
         console.log('  ✅ Qdrant connected');
 
@@ -75,12 +96,24 @@ class DatabaseConnections {
 
     /** Graceful shutdown of all connections */
     async shutdown(): Promise<void> {
-        console.log('\n🔌 Shutting down database connections...');
+        log.info('Shutting down database connections...');
         try { await this.redis.quit(); } catch { }
         try { await this.pg.end(); } catch { }
         try { await this.neo4j.close(); } catch { }
         this.initialized = false;
-        console.log('🔌 All connections closed.');
+        log.info('All connections closed.');
+    }
+
+    /** ENH-007: Per-service health check — returns 'ok' or 'error' per service */
+    async checkHealth(): Promise<Record<string, 'ok' | 'error'>> {
+        const results: Record<string, 'ok' | 'error'> = {};
+        await Promise.all([
+            this.redis.ping().then(() => { results.redis = 'ok'; }).catch(() => { results.redis = 'error'; }),
+            this.pg.query('SELECT 1').then(() => { results.postgres = 'ok'; }).catch(() => { results.postgres = 'error'; }),
+            this.qdrant.getCollections().then(() => { results.qdrant = 'ok'; }).catch(() => { results.qdrant = 'error'; }),
+            this.neo4j.getServerInfo().then(() => { results.neo4j = 'ok'; }).catch(() => { results.neo4j = 'error'; }),
+        ]);
+        return results;
     }
 }
 

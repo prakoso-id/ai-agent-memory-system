@@ -4,7 +4,10 @@ import { v4 as uuid } from 'uuid';
 import { db } from '../database/connections.js';
 import { llm } from '../llm/llm-client.js';
 import { config } from '../config/index.js';
+import { createLogger } from '../logger.js';
 import type { CacheHit, SemanticCacheEntry, SemanticCacheStats } from './types.js';
+
+const log = createLogger('semantic-cache');
 
 /**
  * Semantic Cache — Phase 4 / Enhancement 3.
@@ -75,45 +78,60 @@ export class SemanticCache {
             const entry = await this.loadEntry(exactId);
             if (entry) {
                 await this.recordHit(exactId, 1.0, Date.now() - start);
-                console.log(`  🎯 [SemanticCache] Exact hit (hash) — latency ${Date.now() - start}ms`);
+                log.debug({ latencyMs: Date.now() - start }, 'SemanticCache exact hit (hash)');
                 return { response: entry.response, similarity: 1.0, entryId: exactId };
             }
         }
 
-        // Slow path: cosine similarity scan
+        // Slow path: cosine similarity scan — BUG-002/ENH-009: pipeline batch
         const queryEmbedding = await llm.embed(query);
         const ids = await db.redis.smembers(this.indexKey);
 
         let bestId: string | null = null;
         let bestSim = -1;
+        let bestEntry: (SemanticCacheEntry & { response: string }) | null = null;
 
-        for (const id of ids) {
-            const entry = await this.loadEntry(id);
-            if (!entry) continue;
+        if (ids.length > 0) {
+            // Batch-load all entry payloads in a single Redis round-trip
+            const pipeline = db.redis.pipeline();
+            for (const id of ids) pipeline.get(this.entryKey(id));
+            const pipelineResults = await pipeline.exec();
 
-            const sim = cosineSimilarity(queryEmbedding, entry.embedding);
-            if (sim > bestSim) {
-                bestSim = sim;
-                bestId  = id;
+            const staleIds: string[] = [];
+            for (let i = 0; i < ids.length; i++) {
+                const raw = pipelineResults?.[i]?.[1] as string | null;
+                if (!raw) { staleIds.push(ids[i]!); continue; }
+
+                const parsed: SemanticCacheEntry = JSON.parse(raw);
+                const sim = cosineSimilarity(queryEmbedding, parsed.embedding);
+                if (sim > bestSim) {
+                    bestSim = sim;
+                    bestId  = ids[i]!;
+                    bestEntry = { ...parsed, response: this.decompress(parsed.response) };
+                }
+            }
+
+            // Clean stale index entries (TTL expired) without extra round-trips
+            if (staleIds.length > 0) {
+                const cleanPipeline = db.redis.pipeline();
+                for (const id of staleIds) cleanPipeline.srem(this.indexKey, id);
+                void cleanPipeline.exec();
             }
         }
 
-        if (bestId && bestSim >= this.threshold) {
-            const entry = await this.loadEntry(bestId);
-            if (!entry) return null;
-
+        if (bestId && bestSim >= this.threshold && bestEntry) {
             await this.recordHit(bestId, bestSim, Date.now() - start);
-            console.log(
-                `  🎯 [SemanticCache] Semantic hit — similarity=${bestSim.toFixed(4)} ` +
-                `latency=${Date.now() - start}ms`,
+            log.debug(
+                { similarity: bestSim.toFixed(4), latencyMs: Date.now() - start },
+                'SemanticCache semantic hit',
             );
-            return { response: entry.response, similarity: bestSim, entryId: bestId };
+            return { response: bestEntry.response, similarity: bestSim, entryId: bestId };
         }
 
         await this.recordMiss(Date.now() - start);
-        console.log(
-            `  ❌ [SemanticCache] Cache miss — best_sim=${bestSim.toFixed(4)} ` +
-            `threshold=${this.threshold} latency=${Date.now() - start}ms`,
+        log.debug(
+            { bestSim: bestSim.toFixed(4), threshold: this.threshold, latencyMs: Date.now() - start },
+            'SemanticCache miss',
         );
         return null;
     }
@@ -154,9 +172,9 @@ export class SemanticCache {
             await this.evictIfNeeded();
         }
 
-        console.log(
-            `  💾 [SemanticCache] Stored entry ${id.substring(0, 8)} ` +
-            `(compressed ${response.length}→${compressed.length} chars, TTL ${this.ttl}s)`,
+        log.debug(
+            { id: id.substring(0, 8), originalLen: response.length, compressedLen: compressed.length, ttl: this.ttl },
+            'SemanticCache entry stored',
         );
     }
 
@@ -168,7 +186,7 @@ export class SemanticCache {
         }
         await db.redis.del(this.entryKey(entryId));
         await db.redis.srem(this.indexKey, entryId);
-        console.log(`  🗑️  [SemanticCache] Invalidated entry ${entryId.substring(0, 8)}`);
+        log.debug({ entryId: entryId.substring(0, 8) }, 'SemanticCache entry invalidated');
     }
 
     /** Remove all cache entries */
@@ -180,7 +198,7 @@ export class SemanticCache {
         }
         pipeline.del(this.indexKey);
         await pipeline.exec();
-        console.log(`  🗑️  [SemanticCache] Flushed ${ids.length} entries`);
+        log.debug({ count: ids.length }, 'SemanticCache flushed');
     }
 
     /** Return aggregate cache statistics */
@@ -281,7 +299,7 @@ export class SemanticCache {
         for (const { id } of toEvict) {
             await this.invalidate(id);
         }
-        console.log(`  ♻️  [SemanticCache] Evicted ${toEvict.length} LRU entries`);
+        log.debug({ evicted: toEvict.length }, 'SemanticCache LRU eviction');
     }
 }
 

@@ -2,6 +2,7 @@
 import { corsHeaders } from '../middleware.js';
 import { db } from '../../database/connections.js';
 import { config } from '../../config/index.js';
+import { createLogger } from '../../logger.js';
 import type {
     AgentRole,
     MemoryListFilter,
@@ -11,6 +12,8 @@ import type {
     DashboardMemory,
     ConflictStatus,
 } from '../../memory/types.js';
+
+const log = createLogger('dashboard');
 
 /**
  * Dashboard API Routes â€” Dashboard Backend.
@@ -31,10 +34,12 @@ export function dashboardRoutes(sessions: SessionManager) {
     /**
      * Helper: resolve a MemoryManager from request.
      * Routes that need a session accept ?session_id= or body.session_id.
-     * Global dashboard routes (graph, memories) use the first available session.
+     * Global dashboard routes use the most recently active session (BUG-005 fix).
      */
     function resolveManager(req: Request, sessionId?: string) {
-        const targetId = sessionId ?? sessions.listSessions()[0]?.sessionId;
+        const allSessions = sessions.listSessions();
+        const targetId = sessionId ??
+            allSessions.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity))[0]?.sessionId;
         if (!targetId) return null;
         return sessions.getSession(targetId)?.getMemoryManager() ?? null;
     }
@@ -56,7 +61,7 @@ export function dashboardRoutes(sessions: SessionManager) {
                 const metrics = await mm.getDashboardMetrics();
                 return Response.json({ metrics }, { headers: corsHeaders(req) });
             } catch (err) {
-                console.error('[Dashboard] getMetrics error:', err);
+                log.error({ err }, 'getMetrics error');
                 return Response.json({ error: 'Failed to compute metrics' }, { status: 500, headers: corsHeaders(req) });
             }
         },

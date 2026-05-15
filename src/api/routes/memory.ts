@@ -1,6 +1,61 @@
 import { SessionManager } from '../session-manager.js';
-import { corsHeaders } from '../middleware.js';
+import { corsHeaders, extractApiKey } from '../middleware.js';
+import { z } from 'zod';
 import type { TaskType } from '../../memory/types.js';
+
+const MAX_BODY_BYTES = 512 * 1024; // 512 KB
+
+function checkBodySize(req: Request): Response | null {
+    const contentLength = parseInt(req.headers.get('Content-Length') ?? '0');
+    if (contentLength > MAX_BODY_BYTES) {
+        return Response.json({ error: 'Request body too large (max 512 KB)' }, { status: 413 });
+    }
+    return null;
+}
+
+// Shared validator for session_id in bodies
+const sessionId = z.string().uuid('session_id must be a UUID');
+
+const StoreBodySchema = z.object({
+    session_id: sessionId,
+    content: z.string().min(1, 'content is required').max(16_384),
+    category: z.string().max(64).optional(),
+    importance: z.number().min(0).max(1).optional(),
+    tags: z.array(z.string().max(64)).max(32).optional(),
+});
+
+const SearchBodySchema = z.object({
+    session_id: sessionId,
+    query: z.string().min(1, 'query is required').max(4_096),
+    limit: z.number().int().min(1).max(100).optional(),
+    min_score: z.number().min(0).max(1).optional(),
+    task_type: z.string().max(64).optional(),
+});
+
+const QueryBodySchema = z.object({
+    session_id: sessionId,
+    task: z.string().min(1, 'task is required').max(4_096),
+    context: z.string().max(8_192).optional(),
+    task_type: z.string().max(64).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+});
+
+/** Inline ownership check helper — returns a 403/404 Response or null */
+function ownerGuard(
+    req: Request,
+    sessions: SessionManager,
+    sid: string,
+    apiKey: string,
+): Response | null {
+    const own = sessions.checkOwnership(sid, apiKey);
+    if (own === 'not_found') {
+        return Response.json({ error: `Session ${sid} not found` }, { status: 404, headers: corsHeaders(req) });
+    }
+    if (own === 'forbidden') {
+        return Response.json({ error: 'Access denied' }, { status: 403, headers: corsHeaders(req) });
+    }
+    return null;
+}
 
 /**
  * Memory API route handlers.
@@ -15,28 +70,23 @@ export function memoryRoutes(sessions: SessionManager) {
     return {
         /** Store a fact directly into semantic memory */
         async store(req: Request): Promise<Response> {
-            const body = await req.json() as {
-                session_id: string;
-                content: string;
-                category?: string;
-                importance?: number;
-                tags?: string[];
-            };
+            const sizeError = checkBodySize(req);
+            if (sizeError) return sizeError;
 
-            if (!body.session_id || !body.content) {
+            const raw = await req.json().catch(() => null);
+            const parsed = StoreBodySchema.safeParse(raw);
+            if (!parsed.success) {
                 return Response.json(
-                    { error: 'session_id and content are required' },
+                    { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
                     { status: 400, headers: corsHeaders(req) },
                 );
             }
+            const body = parsed.data;
+            const apiKey = extractApiKey(req);
+            const guardErr = ownerGuard(req, sessions, body.session_id, apiKey);
+            if (guardErr) return guardErr;
 
-            const agent = sessions.getSession(body.session_id);
-            if (!agent) {
-                return Response.json(
-                    { error: `Session ${body.session_id} not found` },
-                    { status: 404, headers: corsHeaders(req) },
-                );
-            }
+            const agent = sessions.getSession(body.session_id)!;
 
             const memory = await agent.getMemoryManager().semantic.store({
                 content: body.content,
@@ -63,28 +113,20 @@ export function memoryRoutes(sessions: SessionManager) {
 
         /** Semantic search across memories */
         async search(req: Request): Promise<Response> {
-            const body = await req.json() as {
-                session_id: string;
-                query: string;
-                limit?: number;
-                min_score?: number;
-                task_type?: TaskType;
-            };
-
-            if (!body.session_id || !body.query) {
+            const raw = await req.json().catch(() => null);
+            const parsed = SearchBodySchema.safeParse(raw);
+            if (!parsed.success) {
                 return Response.json(
-                    { error: 'session_id and query are required' },
+                    { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
                     { status: 400, headers: corsHeaders(req) },
                 );
             }
+            const body = parsed.data;
+            const apiKey = extractApiKey(req);
+            const guardErr = ownerGuard(req, sessions, body.session_id, apiKey);
+            if (guardErr) return guardErr;
 
-            const agent = sessions.getSession(body.session_id);
-            if (!agent) {
-                return Response.json(
-                    { error: `Session ${body.session_id} not found` },
-                    { status: 404, headers: corsHeaders(req) },
-                );
-            }
+            const agent = sessions.getSession(body.session_id)!;
 
             const results = await agent.getMemoryManager().retrieve({
                 query: body.query,
@@ -119,28 +161,20 @@ export function memoryRoutes(sessions: SessionManager) {
          * Body: { session_id, task, context?, task_type?, limit? }
          */
         async queryMemory(req: Request): Promise<Response> {
-            const body = await req.json() as {
-                session_id: string;
-                task: string;
-                context?: string;
-                task_type?: TaskType;
-                limit?: number;
-            };
-
-            if (!body.session_id || !body.task) {
+            const raw = await req.json().catch(() => null);
+            const parsed = QueryBodySchema.safeParse(raw);
+            if (!parsed.success) {
                 return Response.json(
-                    { error: 'session_id and task are required' },
+                    { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
                     { status: 400, headers: corsHeaders(req) },
                 );
             }
+            const body = parsed.data;
+            const apiKey = extractApiKey(req);
+            const guardErr = ownerGuard(req, sessions, body.session_id, apiKey);
+            if (guardErr) return guardErr;
 
-            const agent = sessions.getSession(body.session_id);
-            if (!agent) {
-                return Response.json(
-                    { error: `Session ${body.session_id} not found` },
-                    { status: 404, headers: corsHeaders(req) },
-                );
-            }
+            const agent = sessions.getSession(body.session_id)!;
 
             const results = await agent.getMemoryManager().query({
                 task: body.task,
