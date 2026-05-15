@@ -1,6 +1,16 @@
 import { SessionManager } from '../session-manager.js';
 import { corsHeaders } from '../middleware.js';
 
+const MAX_BODY_BYTES = 512 * 1024; // 512 KB
+
+function checkBodySize(req: Request): Response | null {
+    const contentLength = parseInt(req.headers.get('Content-Length') ?? '0');
+    if (contentLength > MAX_BODY_BYTES) {
+        return Response.json({ error: 'Request body too large (max 512 KB)' }, { status: 413 });
+    }
+    return null;
+}
+
 /**
  * Chat API route handlers.
  * POST /api/chat      — SSE streaming response
@@ -10,6 +20,8 @@ export function chatRoutes(sessions: SessionManager) {
     return {
         /** SSE streaming chat */
         async stream(req: Request): Promise<Response> {
+            const sizeError = checkBodySize(req);
+            if (sizeError) return sizeError;
             const body = await req.json() as { session_id?: string; message: string };
             if (!body.message?.trim()) {
                 return Response.json({ error: 'message is required' }, { status: 400, headers: corsHeaders(req) });
@@ -52,6 +64,8 @@ export function chatRoutes(sessions: SessionManager) {
 
         /** Non-streaming chat (full JSON response) */
         async sync(req: Request): Promise<Response> {
+            const sizeError = checkBodySize(req);
+            if (sizeError) return sizeError;
             const body = await req.json() as { session_id?: string; message: string };
             if (!body.message?.trim()) {
                 return Response.json({ error: 'message is required' }, { status: 400, headers: corsHeaders(req) });

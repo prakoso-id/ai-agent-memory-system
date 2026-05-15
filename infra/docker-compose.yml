@@ -1,0 +1,137 @@
+# ─────────────────────────────────────────────────────────────────────
+# AI Agent Memory System — Database Server
+#
+# Deploy file ini pada dedicated home server database.
+# Salin .env.db.example → .env lalu isi semua nilai sebelum menjalankan.
+#
+#   docker compose up -d
+#   docker compose ps          # pastikan semua status healthy
+#   docker compose logs -f     # pantau log
+# ─────────────────────────────────────────────────────────────────────
+
+name: agent-databases
+
+# Shared logging config — semua service pakai ini
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+
+  # ──────────────────────────────────────────────────────────────────
+  # Redis — Working Memory + Semantic Cache
+  # ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: agent-redis
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:6380:6379"
+    command: >
+      redis-server
+        --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+        --appendonly yes
+        --maxmemory ${REDIS_MAX_MEMORY:-512mb}
+        --maxmemory-policy allkeys-lru
+        --loglevel warning
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 600m
+    cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *logging
+    networks:
+      - agent-net
+
+  # ──────────────────────────────────────────────────────────────────
+  # Qdrant — Semantic Memory / Vector Search
+  # ──────────────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.13.4  # pin ke versi spesifik, cek: hub.docker.com/r/qdrant/qdrant/tags
+    container_name: agent-qdrant
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:6340:6333"
+      - "${BIND_ADDRESS:-0.0.0.0}:6341:6334"
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
+      QDRANT__SERVICE__READ_ONLY_API_KEY: ${QDRANT_READ_API_KEY:-}
+      QDRANT__TELEMETRY_DISABLED: "true"
+      QDRANT__LOG_LEVEL: "INFO"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:6333/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging: *logging
+    networks:
+      - agent-net
+
+  # ──────────────────────────────────────────────────────────────────
+  # Neo4j — Knowledge Graph
+  # ──────────────────────────────────────────────────────────────────
+  neo4j:
+    image: neo4j:5.26-community  # pin ke versi spesifik, cek: hub.docker.com/_/neo4j/tags
+    container_name: agent-neo4j
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:7475:7474"
+      - "${BIND_ADDRESS:-0.0.0.0}:7688:7687"
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL:-512m}
+      NEO4J_dbms_memory_heap_max__size: ${NEO4J_HEAP_MAX:-1G}
+      NEO4J_dbms_memory_pagecache_size: ${NEO4J_PAGECACHE:-512m}
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: "1.0"
+    ulimits:
+      nofile:
+        soft: 40000
+        hard: 40000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7474"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging: *logging
+    networks:
+      - agent-net
+
+volumes:
+  redis_data:
+  qdrant_data:
+  neo4j_data:
+  neo4j_logs:
+
+networks:
+  agent-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16

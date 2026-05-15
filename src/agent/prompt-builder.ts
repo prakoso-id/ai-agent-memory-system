@@ -6,6 +6,7 @@ import type {
     StrategyMemory,
     CompressedMemory,
 } from '../memory/types.js';
+import { config } from '../config/index.js';
 
 /**
  * Prompt Builder — constructs memory-augmented prompts.
@@ -43,8 +44,8 @@ If you remember user preferences, apply them. If you've learned lessons from pas
             content: this.buildContextAwarePrompt(context),
         });
 
-        // Recent conversation history (last 10 messages max for context window management)
-        const recentHistory = conversationHistory.slice(-10);
+        // Recent conversation history (ENH-013: limit configurable via AGENT_HISTORY_LIMIT env var)
+        const recentHistory = conversationHistory.slice(-config.agent.historyLimit);
         for (const msg of recentHistory) {
             messages.push({ role: msg.role, content: msg.content });
         }
@@ -71,8 +72,8 @@ If you remember user preferences, apply them. If you've learned lessons from pas
             content: this.buildSystemPrompt(memories),
         });
 
-        // Recent conversation history (last 10 messages max for context window management)
-        const recentHistory = conversationHistory.slice(-10);
+        // Recent conversation history (ENH-013: limit configurable via AGENT_HISTORY_LIMIT env var)
+        const recentHistory = conversationHistory.slice(-config.agent.historyLimit);
         for (const msg of recentHistory) {
             messages.push({ role: msg.role, content: msg.content });
         }

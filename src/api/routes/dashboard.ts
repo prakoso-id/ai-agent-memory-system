@@ -31,10 +31,12 @@ export function dashboardRoutes(sessions: SessionManager) {
     /**
      * Helper: resolve a MemoryManager from request.
      * Routes that need a session accept ?session_id= or body.session_id.
-     * Global dashboard routes (graph, memories) use the first available session.
+     * Global dashboard routes use the most recently active session (BUG-005 fix).
      */
     function resolveManager(req: Request, sessionId?: string) {
-        const targetId = sessionId ?? sessions.listSessions()[0]?.sessionId;
+        const allSessions = sessions.listSessions();
+        const targetId = sessionId ??
+            allSessions.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity))[0]?.sessionId;
         if (!targetId) return null;
         return sessions.getSession(targetId)?.getMemoryManager() ?? null;
     }

@@ -29,11 +29,13 @@ export const config = {
         user: process.env.POSTGRES_USER || 'agent',
         password: process.env.POSTGRES_PASSWORD || 'agent_secret',
         database: process.env.POSTGRES_DB || 'agent_memory',
+        ssl: process.env.POSTGRES_SSL === 'true',
     },
 
     // Qdrant
     qdrant: {
         url: process.env.QDRANT_URL || 'http://localhost:6333',
+        apiKey: process.env.QDRANT_API_KEY,
         collection: process.env.QDRANT_COLLECTION || 'semantic_memory',
     },
 
@@ -49,6 +51,7 @@ export const config = {
         memoryRetrievalLimit: parseInt(process.env.MEMORY_RETRIEVAL_LIMIT || '7'),
         memoryDecayFactor: parseFloat(process.env.MEMORY_DECAY_FACTOR || '0.01'),
         workingMemoryTTL: parseInt(process.env.WORKING_MEMORY_TTL || '3600'),
+        historyLimit: parseInt(process.env.AGENT_HISTORY_LIMIT || '10'),
     },
 
     // Context Builder (Phase 2)
@@ -70,7 +73,7 @@ export const config = {
     server: {
         port: parseInt(process.env.API_PORT || '3001'),
         corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:5173').split(',').map(s => s.trim()),
-        apiKeys: (process.env.API_KEYS || 'dev-key-change-me').split(',').map(s => s.trim()),
+        apiKeys: (process.env.API_KEYS ?? '').split(',').map(s => s.trim()).filter(Boolean),
     },
 
     // Phase 4: Semantic Cache
@@ -112,3 +115,23 @@ export const config = {
 } as const;
 
 export type Config = typeof config;
+
+/**
+ * Validate required environment variables at startup.
+ * Call this once in startServer() before accepting traffic.
+ * Not called at module load time so that tests can import config freely.
+ */
+export function validateConfig(): void {
+    const missing: string[] = [];
+    if (!process.env.API_KEYS)       missing.push('API_KEYS');
+    if (!process.env.REDIS_URL)      missing.push('REDIS_URL');
+    if (!process.env.POSTGRES_HOST)  missing.push('POSTGRES_HOST');
+    if (!process.env.NEO4J_URI)      missing.push('NEO4J_URI');
+    if (!process.env.QDRANT_URL)     missing.push('QDRANT_URL');
+    if (missing.length > 0) {
+        throw new Error(`FATAL: Missing required environment variables: ${missing.join(', ')}`);
+    }
+    if (config.server.apiKeys.length === 0) {
+        throw new Error('FATAL: API_KEYS must contain at least one non-empty key');
+    }
+}

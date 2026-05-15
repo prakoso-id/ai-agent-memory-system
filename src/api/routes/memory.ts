@@ -2,6 +2,16 @@ import { SessionManager } from '../session-manager.js';
 import { corsHeaders } from '../middleware.js';
 import type { TaskType } from '../../memory/types.js';
 
+const MAX_BODY_BYTES = 512 * 1024; // 512 KB
+
+function checkBodySize(req: Request): Response | null {
+    const contentLength = parseInt(req.headers.get('Content-Length') ?? '0');
+    if (contentLength > MAX_BODY_BYTES) {
+        return Response.json({ error: 'Request body too large (max 512 KB)' }, { status: 413 });
+    }
+    return null;
+}
+
 /**
  * Memory API route handlers.
  *
@@ -15,6 +25,8 @@ export function memoryRoutes(sessions: SessionManager) {
     return {
         /** Store a fact directly into semantic memory */
         async store(req: Request): Promise<Response> {
+            const sizeError = checkBodySize(req);
+            if (sizeError) return sizeError;
             const body = await req.json() as {
                 session_id: string;
                 content: string;
