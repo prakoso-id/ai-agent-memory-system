@@ -715,28 +715,28 @@ ai-agent-memory-system/
 │   │   ├── memory-manager.ts        # Central orchestrator — wires all layers
 │   │   ├── memory-extraction.ts     # LLM knowledge extraction from conversations
 │   │   ├── memory-consolidation.ts  # Decay, merge, summarize, stale archival
-│   │   ├── feedback-tracker.ts      # [P2] Retrieval feedback + adaptive weights
-│   │   ├── strategy-memory.ts       # [P2] Reusable behavioral patterns
-│   │   ├── context-compression.ts   # [P2] Hierarchical compression (raw→summary→insight)
-│   │   ├── conflict-detector.ts     # [P3] Contradictory/outdated memory detection
-│   │   ├── confidence-scorer.ts     # [P3] 4-signal confidence formula
-│   │   ├── hypothesis-manager.ts    # [P3] Multi-perspective conflict resolution
-│   │   ├── evaluation-tracker.ts    # [P3] Retrieval quality metrics + trend detection
-│   │   ├── memory-promoter.ts       # [P3] Episodic→semantic→KG auto-promotion
-│   │   ├── semantic-cache.ts        # [P4] Redis LLM response cache with pipeline batch scan
-│   │   ├── role-memory.ts           # [P4] Role-partitioned memory with importance_per_role
-│   │   ├── observability-service.ts # [P4] Latency ring buffer, DashboardMetrics, advisories
+│   │   ├── feedback-tracker.ts      # Retrieval feedback + adaptive weights
+│   │   ├── strategy-memory.ts       # Reusable behavioral patterns
+│   │   ├── context-compression.ts   # Hierarchical compression (raw→summary→insight)
+│   │   ├── conflict-detector.ts     # Contradictory/outdated memory detection
+│   │   ├── confidence-scorer.ts     # 4-signal confidence formula
+│   │   ├── hypothesis-manager.ts    # Multi-perspective conflict resolution
+│   │   ├── evaluation-tracker.ts    # Retrieval quality metrics + trend detection
+│   │   ├── memory-promoter.ts       # Episodic→semantic→KG auto-promotion
+│   │   ├── semantic-cache.ts        # Redis LLM response cache with pipeline batch scan
+│   │   ├── role-memory.ts           # Role-partitioned memory with importance_per_role
+│   │   ├── observability-service.ts # Latency ring buffer, DashboardMetrics, advisories
 │   │   └── utils/
 │   │       ├── reranker.ts          # Multi-signal composite scorer (adaptive weights + boosts)
 │   │       ├── task-relevance.ts    # taskType inference + tag scoring
 │   │       └── write-filter.ts      # Importance threshold + novelty gate
 │   ├── reflection/
 │   │   ├── reflection-engine.ts     # Post-task reflection + strategy extraction via LLM
-│   │   └── behavior-engine.ts       # [P2] Reflection → behavioral directives
+│   │   └── behavior-engine.ts       # Reflection → behavioral directives
 │   ├── agent/
 │   │   ├── agent-controller.ts      # Orchestrates chat + stream + memory pipeline
 │   │   ├── prompt-builder.ts        # Memory-augmented LLM prompts (supports BuiltContext)
-│   │   └── context-builder.ts       # [P2] Token-aware context assembly
+│   │   └── context-builder.ts       # Token-aware context assembly
 │   ├── examples/
 │   │   ├── phase1-usage.ts
 │   │   ├── phase2-usage.ts
