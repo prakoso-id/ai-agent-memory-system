@@ -89,10 +89,10 @@ class LLMClient {
 
     /** Generate embeddings for text (direct fetch — avoids SDK base64 encoding issue with LM Studio) */
     async embed(text: string): Promise<number[]> {
-        const response = await fetch(`${config.llm.baseUrl}/embeddings`, {
+        const response = await fetch(`${config.embedding.baseUrl}/embeddings`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.llm.apiKey}` },
-            body: JSON.stringify({ model: config.llm.embeddingModel, input: text }),
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.embedding.apiKey}` },
+            body: JSON.stringify({ model: config.embedding.model, input: text }),
             signal: AbortSignal.timeout(LLMClient.LLM_TIMEOUT_MS),
         });
 
@@ -106,10 +106,10 @@ class LLMClient {
 
     /** Generate embeddings for multiple texts */
     async embedBatch(texts: string[]): Promise<number[][]> {
-        const response = await fetch(`${config.llm.baseUrl}/embeddings`, {
+        const response = await fetch(`${config.embedding.baseUrl}/embeddings`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.llm.apiKey}` },
-            body: JSON.stringify({ model: config.llm.embeddingModel, input: texts }),
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.embedding.apiKey}` },
+            body: JSON.stringify({ model: config.embedding.model, input: texts }),
             signal: AbortSignal.timeout(LLMClient.LLM_TIMEOUT_MS),
         });
 
