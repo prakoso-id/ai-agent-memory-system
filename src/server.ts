@@ -7,6 +7,7 @@ import { chatRoutes } from './api/routes/chat.js';
 import { memoryRoutes } from './api/routes/memory.js';
 import { sessionRoutes } from './api/routes/sessions.js';
 import { dashboardRoutes } from './api/routes/dashboard.js';
+import { logger } from './logger.js';
 
 /**
  * AI Agent Memory System — REST API Server.
@@ -203,7 +204,7 @@ async function startServer(): Promise<void> {
                     response = await authHandler(req);
                 }
             } catch (error) {
-                console.error('Server error:', error);
+                logger.error({ err: error }, 'Server error');
                 response = Response.json(
                     { error: 'Internal server error' },
                     { status: 500, headers: corsHeaders(req) },
@@ -215,13 +216,14 @@ async function startServer(): Promise<void> {
         },
     });
 
-    console.log(`\n🚀 API Server running at http://localhost:${server.port}`);
-    console.log(`   Auth: Bearer token required (configured ${config.server.apiKeys.length} key(s))`);
-    console.log(`   CORS: ${config.server.corsOrigins.join(', ')}\n`);
+    logger.info(
+        { port: server.port, keys: config.server.apiKeys.length, cors: config.server.corsOrigins },
+        `API Server running at http://localhost:${server.port}`,
+    );
 
     // Graceful shutdown
     const shutdown = async () => {
-        console.log('\n👋 Shutting down server...');
+        logger.info('Shutting down server...');
         sessions.destroy();
         server.stop();
         await db.shutdown();

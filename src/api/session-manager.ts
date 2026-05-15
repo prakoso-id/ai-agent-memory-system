@@ -1,8 +1,13 @@
 import { AgentController } from '../agent/agent-controller.js';
 import { db } from '../database/connections.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('session-manager');
 
 interface SessionInfo {
     sessionId: string;
+    /** API key that created this session — SEC-004: ownership validation */
+    ownerKey?: string;
     createdAt: string;
     lastActivity: string;
     interactionCount: number;
@@ -40,7 +45,7 @@ export class SessionManager {
                 const agent = new AgentController(id);
                 this.sessions.set(id, { agent, info });
             }
-            if (ids.length > 0) console.log(`  📂 Restored ${ids.length} session(s) from Redis`);
+            if (ids.length > 0) log.info({ count: ids.length }, 'Restored sessions from Redis');
         } catch {
             // Non-fatal: Redis may not have any persisted sessions on first run
         }
@@ -63,13 +68,14 @@ export class SessionManager {
         } catch { /* best-effort */ }
     }
 
-    /** Create a new session, optionally with a specific ID */
-    createSession(sessionId?: string): { agent: AgentController; sessionId: string } {
+    /** Create a new session, optionally with a specific ID and owner API key */
+    createSession(sessionId?: string, ownerKey?: string): { agent: AgentController; sessionId: string } {
         const agent = new AgentController(sessionId);
         const id = agent.getSessionId();
 
         const info: SessionInfo = {
             sessionId: id,
+            ownerKey,
             createdAt: new Date().toISOString(),
             lastActivity: new Date().toISOString(),
             interactionCount: 0,
@@ -77,19 +83,30 @@ export class SessionManager {
         this.sessions.set(id, { agent, info });
         void this.persistToRedis(info);
 
-        console.log(`  📌 Session created: ${id}`);
+        log.info({ sessionId: id }, 'Session created');
         return { agent, sessionId: id };
     }
 
     /** Get an existing session, or create one if sessionId is provided but doesn't exist */
-    getOrCreate(sessionId?: string): { agent: AgentController; sessionId: string } {
+    getOrCreate(sessionId?: string, ownerKey?: string): { agent: AgentController; sessionId: string } {
         if (sessionId && this.sessions.has(sessionId)) {
             const session = this.sessions.get(sessionId)!;
             session.info.lastActivity = new Date().toISOString();
             void this.persistToRedis(session.info);
             return { agent: session.agent, sessionId };
         }
-        return this.createSession(sessionId);
+        return this.createSession(sessionId, ownerKey);
+    }
+
+    /**
+     * Validate that the given API key owns a session — SEC-004.
+     * Returns 'ok', 'not_found', or 'forbidden'.
+     */
+    checkOwnership(sessionId: string, callerKey: string): 'ok' | 'not_found' | 'forbidden' {
+        const session = this.sessions.get(sessionId);
+        if (!session) return 'not_found';
+        if (session.info.ownerKey && session.info.ownerKey !== callerKey) return 'forbidden';
+        return 'ok';
     }
 
     /** Get an existing session */
@@ -122,7 +139,7 @@ export class SessionManager {
         const deleted = this.sessions.delete(sessionId);
         if (deleted) {
             void this.removeFromRedis(sessionId);
-            console.log(`  🗑️  Session deleted: ${sessionId}`);
+            log.info({ sessionId }, 'Session deleted');
         }
         return deleted;
     }
@@ -135,7 +152,7 @@ export class SessionManager {
             if (now - lastActive > this.ttlMs) {
                 this.sessions.delete(id);
                 void this.removeFromRedis(id);
-                console.log(`  ♻️  Session expired: ${id}`);
+                log.info({ sessionId: id }, 'Session expired');
             }
         }
     }

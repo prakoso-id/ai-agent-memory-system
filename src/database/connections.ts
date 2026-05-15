@@ -3,7 +3,9 @@ import pg from 'pg';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j, { type Driver as Neo4jDriver } from 'neo4j-driver';
 import { config } from '../config/index.js';
+import { createLogger } from '../logger.js';
 
+const log = createLogger('db');
 const { Pool } = pg;
 
 /**
@@ -17,6 +19,11 @@ class DatabaseConnections {
     public pg!: pg.Pool;
     public qdrant!: QdrantClient;
     public neo4j!: Neo4jDriver;
+
+    /** ENH-006: per-service availability flags */
+    public availability: Record<'redis' | 'postgres' | 'qdrant' | 'neo4j', boolean> = {
+        redis: false, postgres: false, qdrant: false, neo4j: false,
+    };
 
     private initialized = false;
 
@@ -89,12 +96,12 @@ class DatabaseConnections {
 
     /** Graceful shutdown of all connections */
     async shutdown(): Promise<void> {
-        console.log('\n🔌 Shutting down database connections...');
+        log.info('Shutting down database connections...');
         try { await this.redis.quit(); } catch { }
         try { await this.pg.end(); } catch { }
         try { await this.neo4j.close(); } catch { }
         this.initialized = false;
-        console.log('🔌 All connections closed.');
+        log.info('All connections closed.');
     }
 
     /** ENH-007: Per-service health check — returns 'ok' or 'error' per service */

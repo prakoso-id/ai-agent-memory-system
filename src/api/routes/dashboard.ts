@@ -2,6 +2,7 @@
 import { corsHeaders } from '../middleware.js';
 import { db } from '../../database/connections.js';
 import { config } from '../../config/index.js';
+import { createLogger } from '../../logger.js';
 import type {
     AgentRole,
     MemoryListFilter,
@@ -11,6 +12,8 @@ import type {
     DashboardMemory,
     ConflictStatus,
 } from '../../memory/types.js';
+
+const log = createLogger('dashboard');
 
 /**
  * Dashboard API Routes â€” Dashboard Backend.
@@ -58,7 +61,7 @@ export function dashboardRoutes(sessions: SessionManager) {
                 const metrics = await mm.getDashboardMetrics();
                 return Response.json({ metrics }, { headers: corsHeaders(req) });
             } catch (err) {
-                console.error('[Dashboard] getMetrics error:', err);
+                log.error({ err }, 'getMetrics error');
                 return Response.json({ error: 'Failed to compute metrics' }, { status: 500, headers: corsHeaders(req) });
             }
         },

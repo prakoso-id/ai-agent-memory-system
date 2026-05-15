@@ -1,5 +1,10 @@
 import { SessionManager } from '../session-manager.js';
-import { corsHeaders } from '../middleware.js';
+import { corsHeaders, extractApiKey } from '../middleware.js';
+import { z } from 'zod';
+
+const CreateSessionSchema = z.object({
+    session_id: z.string().uuid('session_id must be a UUID').optional(),
+});
 
 /**
  * Session API route handlers.
@@ -12,8 +17,16 @@ export function sessionRoutes(sessions: SessionManager) {
     return {
         /** Create a new session */
         async create(req: Request): Promise<Response> {
-            const body = await req.json().catch(() => ({})) as { session_id?: string };
-            const { sessionId } = sessions.createSession(body.session_id);
+            const raw = await req.json().catch(() => ({}));
+            const parsed = CreateSessionSchema.safeParse(raw);
+            if (!parsed.success) {
+                return Response.json(
+                    { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+                    { status: 400, headers: corsHeaders(req) },
+                );
+            }
+            const apiKey = extractApiKey(req);
+            const { sessionId } = sessions.createSession(parsed.data.session_id, apiKey);
             return Response.json(
                 { sessionId, created: true },
                 { status: 201, headers: corsHeaders(req) },
@@ -31,14 +44,16 @@ export function sessionRoutes(sessions: SessionManager) {
 
         /** Get session details */
         async get(req: Request, sessionId: string): Promise<Response> {
-            const agent = sessions.getSession(sessionId);
-            if (!agent) {
-                return Response.json(
-                    { error: `Session ${sessionId} not found` },
-                    { status: 404, headers: corsHeaders(req) },
-                );
+            const apiKey = extractApiKey(req);
+            const own = sessions.checkOwnership(sessionId, apiKey);
+            if (own === 'not_found') {
+                return Response.json({ error: `Session ${sessionId} not found` }, { status: 404, headers: corsHeaders(req) });
+            }
+            if (own === 'forbidden') {
+                return Response.json({ error: 'Access denied' }, { status: 403, headers: corsHeaders(req) });
             }
 
+            const agent = sessions.getSession(sessionId)!;
             const stats = await agent.getStats();
             const info = sessions.listSessions().find((s) => s.sessionId === sessionId);
 
@@ -50,13 +65,15 @@ export function sessionRoutes(sessions: SessionManager) {
 
         /** Delete a session */
         async remove(req: Request, sessionId: string): Promise<Response> {
-            const deleted = sessions.deleteSession(sessionId);
-            if (!deleted) {
-                return Response.json(
-                    { error: `Session ${sessionId} not found` },
-                    { status: 404, headers: corsHeaders(req) },
-                );
+            const apiKey = extractApiKey(req);
+            const own = sessions.checkOwnership(sessionId, apiKey);
+            if (own === 'not_found') {
+                return Response.json({ error: `Session ${sessionId} not found` }, { status: 404, headers: corsHeaders(req) });
             }
+            if (own === 'forbidden') {
+                return Response.json({ error: 'Access denied' }, { status: 403, headers: corsHeaders(req) });
+            }
+            sessions.deleteSession(sessionId);
             return Response.json(
                 { deleted: true, sessionId },
                 { headers: corsHeaders(req) },

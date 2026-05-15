@@ -1,5 +1,8 @@
 import { config } from '../config/index.js';
 import { db } from '../database/connections.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('middleware');
 
 type Handler = (req: Request) => Promise<Response> | Response;
 
@@ -78,10 +81,17 @@ export function withRateLimit(maxPerMinute: number): (handler: Handler) => Handl
 }
 
 /**
- * Log request details.
+ * Extract the raw Bearer token from the Authorization header.
+ * Used by route handlers to bind or validate session ownership (SEC-004).
+ */
+export function extractApiKey(req: Request): string {
+    const auth = req.headers.get('Authorization') ?? '';
+    return auth.startsWith('Bearer ') ? auth.slice(7) : '';
+}
+
+/**
+ * Log request details — ENH-003: structured JSON via pino.
  */
 export function logRequest(method: string, path: string, status: number, durationMs: number): void {
-    const timestamp = new Date().toISOString();
-    const statusIcon = status < 400 ? '✅' : '❌';
-    console.log(`  ${statusIcon} [${timestamp}] ${method} ${path} → ${status} (${durationMs}ms)`);
+    log.info({ method, path, status, durationMs }, `${method} ${path} \u2192 ${status}`);
 }
